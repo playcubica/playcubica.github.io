@@ -48,6 +48,21 @@ export class PlayerSession {
   sleptAt = 0;
   onGround = true;
   fallStartY = 0;
+  sneaking = false;
+  /** Anti-cheat movement bookkeeping. */
+  lastMoveAt = 0;
+  /** After a teleport, moves are ignored until the client reports a position near here. */
+  teleportTarget: Vec3 | null = null;
+  teleportAt = 0;
+  violations = 0;
+  /** Swing animation shown to others until this time (ms). */
+  swingUntil = 0;
+  /** Times of recent chat messages (rate limit). */
+  chatTimes: number[] = [];
+  /** Last message received from this client (ms). */
+  lastSeen = performance.now();
+  pendingPing: { id: number; at: number } | null = null;
+  rtt = -1;
   regenTimer = 0;
   starveTimer = 0;
   drownTimer = 0;

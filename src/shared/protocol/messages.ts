@@ -39,13 +39,27 @@ export type ClientMsg =
   | { t: 'closeWindow'; window: number }
   /** Host only. */
   | { t: 'setGameMode'; mode: number }
-  | { t: 'chat'; text: string } // (stage 4)
+  | { t: 'chat'; text: string }
+  | { t: 'pong'; id: number }
   | { t: 'respawn' };
 
 export interface PlayerInfo {
   id: number;
   name: string;
 }
+
+export interface PlayerListEntry extends PlayerInfo {
+  /** Round-trip time in ms (-1 = unknown). */
+  ping: number;
+  host: boolean;
+}
+
+/** Bit flags in EntityState.anim. */
+export const Anim = {
+  SNEAK: 1,
+  SWING: 2,
+  FLYING: 4,
+} as const;
 
 export interface EntityState {
   id: number;
@@ -77,12 +91,12 @@ export type ServerMsg =
   | { t: 'unloadChunk'; cx: number; cz: number }
   /** `id` is the raw block value (id + state). */
   | { t: 'blockChange'; x: number; y: number; z: number; id: number }
-  | { t: 'digProgress'; playerId: number; x: number; y: number; z: number; stage: number } // (stage 4)
   | { t: 'entitySpawn'; entity: EntityInfo }
   | { t: 'entityDespawn'; id: number; pickedBy?: number }
   /** Positions of moving entities, flat [id, x, y, z, …]. */
   | { t: 'entityMove'; data: number[] }
-  | { t: 'snapshot'; entities: EntityState[] } // (stage 4)
+  /** Other players' positions (10 Hz). */
+  | { t: 'snapshot'; entities: EntityState[] }
   | { t: 'teleport'; x: number; y: number; z: number }
   | { t: 'inventory'; state: InventoryState }
   /** Contents of an open window's container slots (window 0 = own crafting grid). */
@@ -93,10 +107,12 @@ export type ServerMsg =
   | { t: 'hurt'; amount: number }
   | { t: 'death'; message: string }
   | { t: 'time'; time: number }
-  /** System messages use from = ''. Player chat arrives in stage 4. */
+  /** System messages use from = ''. */
   | { t: 'chat'; from: string; text: string }
-  | { t: 'playerJoin'; player: PlayerInfo } // (stage 4)
-  | { t: 'playerLeave'; id: number } // (stage 4)
+  | { t: 'playerJoin'; player: PlayerInfo }
+  | { t: 'playerLeave'; id: number }
+  | { t: 'playerList'; players: PlayerListEntry[] }
+  | { t: 'ping'; id: number }
   | { t: 'kick'; reason: string };
 
 export interface EntityInfo {

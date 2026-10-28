@@ -26,6 +26,7 @@ export class Controls {
   /** Pointer lock was refused (e.g. requested without a user gesture). */
   onLockError: (() => void) | null = null;
   onKeyPress: ((code: string, e: KeyboardEvent) => void) | null = null;
+  onKeyRelease: ((code: string) => void) | null = null;
   onMouseDown: ((button: number) => void) | null = null;
   onWheel: ((steps: number) => void) | null = null;
   private readonly down = new Set<string>();
@@ -67,7 +68,10 @@ export class Controls {
       if (!e.repeat) this.onKeyPress?.(e.code, e);
       if (this.locked) this.down.add(e.code);
     }, opt);
-    window.addEventListener('keyup', (e) => this.down.delete(e.code), opt);
+    window.addEventListener('keyup', (e) => {
+      this.down.delete(e.code);
+      this.onKeyRelease?.(e.code);
+    }, opt);
     window.addEventListener('blur', () => { this.down.clear(); this.buttons.clear(); }, opt);
   }
 

@@ -36,7 +36,8 @@ Automated browsers can't get Pointer Lock: to test, set `client.state = 'playing
 - `GameClient` (src/client) handles rendering, input, (future) movement prediction, and UI.
 - They talk only through `Transport` (src/net) and the messages in `src/shared/protocol/messages.ts`.
   - Single player and the host's own client: `LocalTransport` (in memory, asynchronous).
-  - Stage 4: `PeerTransport` (PeerJS DataConnection, `serialization: 'binary'`) for each friend.
+  - Friends: `PeerTransport` (PeerJS DataConnection, `serialization: 'raw'`, `reliable: true`) with our
+    own binary codec + fragmentation (`shared/protocol/codec.ts`).
 - The server runs on the main thread (WebRTC is not available in Workers). Heavy work goes to Workers:
   - `worldgen.worker.ts`: generation + base (isolated) chunk lighting.
   - `mesher.worker.ts`: greedy meshing.
@@ -64,7 +65,10 @@ src/
           interaction/BlockInteraction.ts   targeting, mining progress + cracks, placing, pick block
           ui/Hud.ts (hotbar, hearts/food/air, messages) WindowScreen.ts (all container UIs) icons.ts
           render/EntityRenderer.ts (dropped items as sprites)  textures/itemTextures.ts (item sprites)
-  net/    Transport.ts LocalTransport.ts
+          render/PlayerModels.ts (other players: block figure, name tag, interpolation)
+          ui/Social.ts (T chat line, Tab player list)
+  net/    Transport.ts LocalTransport.ts PeerTransport.ts peerNetwork.ts (HostNetwork, joinHost,
+          invite codes, Hebrew error messages; peerjs is loaded lazily, so single player never touches it)
   workers/ WorkerPool.ts worldgen.worker.ts mesher.worker.ts types.ts
 tests/    vitest (noise, worldgen, codec, lighting, mesher, inventory, physics, raycast, world file,
           host validation + save/load through a real GameServer with a fake generator and in-memory store)
@@ -121,8 +125,35 @@ prediction.
 Host validation already in place: reach (5 + 1.5 slack, from the eye), minimum dig time in survival (70% of
 `breakTime`), the held stack must contain a placeable block, the target must be replaceable, a placed block
 must touch something, it can't overlap a player, plants need solid ground, creative-only inventory actions.
-Still to come in stage 4: movement speed limit (fall damage currently trusts the client's positions),
-chat rate-limit.
+Stage 4 added: movement speed limit, chat rate-limit, name checks, timeouts. Fall damage still derives
+from client-reported positions (bounded by the speed check).
+
+### Multiplayer (stage 4)
+- Host: pause menu → "פתח לחברים" → `HostNetwork.open()` registers peer id `cubica-v1-<CODE>` on the free
+  public PeerJS signalling server (0.peerjs.com) with free STUN (Google, Cloudflare). Invite code
+  `XXXX-XXXX` (alphabet without 0/O/1/I/L) and link `?join=CODE`. Each incoming connection becomes a
+  `PeerTransport` handed to `GameServer.addConnection`. No TURN server: symmetric NATs (some mobile or
+  corporate networks) can't connect, and the timeout message says so.
+- Joining: main menu "הצטרף לחבר" (or opening the invite link) → `joinHost(code)` → `GameSession.remote`
+  (client only, no IndexedDB writes; the world lives at the host). 20 s timeout with a readable reason.
+- Wire format: `encodeMessage`: byte 0 = 0 JSON, 1 = chunk (varint cx/cz + chunkCodec bytes).
+  `fragment`: 16 KB frames, reassembled in order, 2 MB cap. Host skips chunk streaming while the
+  data channel backlog > 512 KB.
+- Sync: `playerJoin`/`playerLeave`, `snapshot` of other players at 10 Hz (pos, yaw, pitch, anim flags
+  sneak/swing/flying), rendered 120 ms behind with interpolation. Blocks/items/containers were already
+  host-authoritative and broadcast to everyone holding the chunk.
+- Chat (T, or / for commands): host strips control chars, 200 chars max, 5 messages per 5 s.
+  Commands: `/help`, `/list`, `/kick name` (host only).
+- Tab: player list with ping (host pings every 2 s; list every 5 s and on join/leave).
+- Validation added: names (`sanitizeName`: 1–16 letters/digits/space/_/-, unique per world), movement
+  speed (8 b/s on foot, 24 flying, +1.5 slack per message; otherwise teleport back), moves ignored after
+  a teleport until the client reports the new position, client silence > 30 s → dropped; client side,
+  host silence > 20 s → disconnected screen. Host leaving sends `kick` "המארח סגר את העולם".
+- The host's player name comes from the main menu (stored in localStorage `cubica.name`); old saves
+  keyed "Player" are taken over by the host's name.
+- Testing note: the Claude desktop app's built-in browser blocks WebRTC entirely (even an in-page
+  RTCPeerConnection loopback stays at ICE "new"), so real P2P must be tested in Chrome/Edge/Firefox/
+  Safari. Signalling via 0.peerjs.com was verified from the built-in browser (offer/answer exchanged).
 
 ### Survival (stage 3)
 - Stats live on the host (`PlayerSession`): health 20, food 20 + saturation + exhaustion (walking/sprinting/
@@ -185,7 +216,7 @@ before the user has approved the current one.**
 3. ✅ **Survival**: health, hunger, fall damage, drowning, death/respawn, 2×2/3×3 crafting with our own
    recipes, 5 tool tiers with durability, furnace, chests, bedroll, torches, doors, food, drop tables,
    dropped items, saplings that grow.
-4. ⏳ **P2P multiplayer**: "Open to friends" → code/link `?join=CODE`, PeerJS + public STUN, chunk sync,
+4. ✅ **P2P multiplayer**: "Open to friends" → code/link `?join=CODE`, PeerJS + public STUN, chunk sync,
    players, blocks, entities, chat (T), player list (Tab), host validation, disconnect handling, up to 8
    players, clear error messages when a connection fails (including symmetric NAT without TURN).
 5. ⏳ **Creatures**: original passive and hostile creatures (no creeper equivalent), light-based spawning,

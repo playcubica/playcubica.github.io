@@ -115,18 +115,22 @@ async function setup(mode: number) {
     c.send(m);
     await flush();
   };
+  const tp = (pos: number[]) => (server as unknown as { teleport(p: Session, pos: number[]): void }).teleport(session, pos);
+  tp([0.5, 10, 0.5]);
   await send({ t: 'move', seq: 0, x: 0.5, y: 10, z: 0.5, yaw: 0, pitch: 0, flags: MoveFlag.ON_GROUND });
-  return { server, session, received, send, tick };
+  return { server, session, received, send, tick, tp };
 }
 
 describe('survival on the host', () => {
   it('applies fall damage, kills, drops the inventory and respawns', async () => {
-    const { session, received, send, server } = await setup(GameMode.SURVIVAL);
+    const { session, received, send, server, tp } = await setup(GameMode.SURVIVAL);
     session.inventory.add(B.DIRT, 10);
+    tp([0.5, 30, 0.5]);
     await send({ t: 'move', seq: 1, x: 0.5, y: 30, z: 0.5, yaw: 0, pitch: 0, flags: 0 });
     await send({ t: 'move', seq: 2, x: 0.5, y: 10, z: 0.5, yaw: 0, pitch: 0, flags: MoveFlag.ON_GROUND });
     expect(session.health).toBe(20 - 17);
     expect(received.some((m) => m.t === 'hurt')).toBe(true);
+    tp([0.5, 20, 0.5]);
     await send({ t: 'move', seq: 3, x: 0.5, y: 20, z: 0.5, yaw: 0, pitch: 0, flags: 0 });
     await send({ t: 'move', seq: 4, x: 0.5, y: 10, z: 0.5, yaw: 0, pitch: 0, flags: MoveFlag.ON_GROUND });
     expect(session.dead).toBe(true);

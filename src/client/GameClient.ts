@@ -22,10 +22,15 @@ import { Hud } from './ui/Hud';
 import { WindowScreen, type OpenWindowState, type WindowHost } from './ui/WindowScreen';
 import { setIconAtlas } from './ui/icons';
 import { EntityRenderer } from './render/EntityRenderer';
+import { PlayerModels } from './render/PlayerModels';
+import { ChatInput, PlayerListView } from './ui/Social';
+import type { PlayerListEntry } from '../shared/protocol/messages';
 
 export interface ClientOptions {
   name: string;
   fov?: number;
+  /** Connected to another machine's host (enables the connection watchdog). */
+  remote?: boolean;
 }
 
 export type ClientStatus =
@@ -35,7 +40,10 @@ export type ClientStatus =
   | { kind: 'dead'; message: string }
   | { kind: 'disconnected'; reason: string };
 
-type UiState = 'loading' | 'playing' | 'paused' | 'window' | 'resuming' | 'dead' | 'disconnected';
+type UiState = 'loading' | 'playing' | 'paused' | 'window' | 'chat' | 'resuming' | 'dead' | 'disconnected';
+
+/** A remote host that stays silent this long is considered gone. */
+const HOST_TIMEOUT_MS = 20_000;
 
 /** Max milliseconds per frame spent decoding and lighting incoming chunks. */
 const CHUNK_BUDGET_MS = 4;
@@ -56,6 +64,12 @@ export class GameClient implements InteractionHost, WindowHost {
   private readonly hud: Hud;
   private readonly windowScreen: WindowScreen;
   private readonly entities: EntityRenderer;
+  private readonly others: PlayerModels;
+  private readonly chatInput: ChatInput;
+  private readonly playerList: PlayerListView;
+  private playerId = 0;
+  private playerEntries: PlayerListEntry[] = [];
+  private lastHostMessage = performance.now();
   /** The player's own window (2×2 crafting) and an open container, if any. */
   private readonly ownWindow: OpenWindowState = { id: 0, kind: 'inventory', slots: emptySlots('inventory') };
   private container: OpenWindowState | null = null;
@@ -105,16 +119,31 @@ export class GameClient implements InteractionHost, WindowHost {
     this.hud = new Hud(container);
     this.windowScreen = new WindowScreen(container, this);
     this.entities = new EntityRenderer(this.renderer.scene, this.world);
+    this.others = new PlayerModels(this.renderer.scene, this.world);
+    this.chatInput = new ChatInput(container);
+    this.chatInput.onSend = (text) => this.send({ t: 'chat', text });
+    this.chatInput.onClose = () => {
+      if (this.state !== 'chat') return;
+      this.state = 'resuming';
+      this.controls.lock();
+    };
+    this.playerList = new PlayerListView(container);
     this.debug = new DebugOverlay(container);
 
     this.controls.onKeyPress = (code) => this.keyPressed(code);
+    this.controls.onKeyRelease = (code) => {
+      if (code === KEYS.playerList) this.playerList.show(false);
+    };
     this.controls.onWheel = (steps) => this.selectSlot((this.inventory.selected + steps + HOTBAR_SIZE) % HOTBAR_SIZE);
     this.controls.onLockChange = (locked) => this.lockChanged(locked);
     this.controls.onLockError = () => {
       if (this.state === 'resuming' || this.state === 'playing') this.setState('paused');
     };
 
-    transport.onMessage = (msg) => this.receive(msg);
+    transport.onMessage = (msg) => {
+      this.lastHostMessage = performance.now();
+      this.receive(msg);
+    };
     transport.onClose = (reason) => this.disconnect(reason);
   }
 
@@ -213,13 +242,18 @@ export class GameClient implements InteractionHost, WindowHost {
   private lockChanged(locked: boolean): void {
     if (locked) {
       if (this.state !== 'disconnected' && this.state !== 'loading' && this.state !== 'dead') this.setState('playing');
-    } else if (this.state === 'playing' || this.state === 'resuming') {
+    } else if (this.state === 'playing' || (this.state === 'resuming' && !this.chatInput.open)) {
       this.setState('paused');
     }
   }
 
   private keyPressed(code: string): void {
     if (code === KEYS.debug) this.debug.toggle();
+    if (code === KEYS.playerList && this.state !== 'chat') {
+      this.playerList.set(this.playerEntries, this.playerId);
+      this.playerList.show(true);
+    }
+    if (this.state === 'chat') return;
     if (this.state === 'window') {
       if (code === KEYS.inventory || code === 'Escape') this.closeWindow(code === KEYS.inventory);
       return;
@@ -227,6 +261,12 @@ export class GameClient implements InteractionHost, WindowHost {
     if (this.state !== 'playing') return;
     if (code === KEYS.inventory) {
       this.openWindowScreen();
+      return;
+    }
+    if (code === KEYS.chat || code === 'Slash') {
+      this.state = 'chat';
+      this.controls.unlock();
+      this.chatInput.show(code === 'Slash' ? '/' : '');
       return;
     }
     if (code === 'KeyQ' && this.inventory.held) {
@@ -286,6 +326,9 @@ export class GameClient implements InteractionHost, WindowHost {
     this.hud.dispose();
     this.windowScreen.dispose();
     this.entities.dispose();
+    this.others.dispose();
+    this.chatInput.dispose();
+    this.playerList.dispose();
     this.debug.el.remove();
     this.renderer.dispose();
   }
@@ -295,6 +338,8 @@ export class GameClient implements InteractionHost, WindowHost {
   private receive(msg: ServerMsg): void {
     switch (msg.t) {
       case 'welcome':
+        this.playerId = msg.playerId;
+        for (const pl of msg.players) if (pl.id !== msg.playerId) this.others.add(pl.id, pl.name);
         this.seed = msg.seed;
         this.viewDistance = msg.viewDistance;
         this.isHost = msg.isHost;
@@ -376,7 +421,23 @@ export class GameClient implements InteractionHost, WindowHost {
         this.entities.move(msg.data);
         break;
       case 'chat':
-        this.hud.message(msg.from ? `<${msg.from}> ${msg.text}` : msg.text);
+        this.hud.message(msg.from ? `${msg.from}: ${msg.text}` : msg.text, !msg.from);
+        break;
+      case 'playerJoin':
+        if (msg.player.id !== this.playerId) this.others.add(msg.player.id, msg.player.name);
+        break;
+      case 'playerLeave':
+        this.others.remove(msg.id);
+        break;
+      case 'playerList':
+        this.playerEntries = msg.players;
+        this.playerList.set(this.playerEntries, this.playerId);
+        break;
+      case 'snapshot':
+        this.others.snapshot(msg.entities);
+        break;
+      case 'ping':
+        this.send({ t: 'pong', id: msg.id });
         break;
       case 'time':
         this.setServerTime(msg.time);
@@ -468,6 +529,11 @@ export class GameClient implements InteractionHost, WindowHost {
 
     this.meshes.update(body.x, body.z);
     this.entities.update(dt, sky.daylight);
+    this.others.update(dt, sky.daylight);
+    if (this.options.remote && this.state !== 'disconnected' && performance.now() - this.lastHostMessage > HOST_TIMEOUT_MS) {
+      this.transport.close('המארח לא מגיב');
+      this.disconnect('המארח לא הגיב 20 שניות — ייתכן שהוא סגר את המשחק או שהחיבור נפל.');
+    }
     this.hud.setStats(this.health, this.food, this.air, !this.creative);
     this.hud.update(this.inventory, underwater, dt);
     this.renderer.render();
@@ -512,13 +578,13 @@ export class GameClient implements InteractionHost, WindowHost {
     const tg = this.interaction.target;
     const state = [b.onGround && 'ground', b.inWater && 'water', b.flying && 'flying', b.sneaking && 'sneak', b.sprinting && 'sprint'].filter(Boolean).join(' ');
     this.debug.set([
-      'Cubica 0.3 (stage 3)',
+      'Cubica 0.4 (stage 4)',
       `${this.fps} fps  (cpu ${this.frameMs.toFixed(1)} ms)  draws ${info.calls}  tris ${Math.round(info.triangles / 1000)}k`,
       `XYZ ${b.x.toFixed(2)} / ${b.y.toFixed(2)} / ${b.z.toFixed(2)}  ${state}`,
       `Chunk ${bx >> 4} ${bz >> 4}  facing ${facing}`,
       `Biome ${biome}  light sky ${light >> 4} block ${light & 15}`,
       tg ? `Target ${blockDef(tg.id)?.name} @ ${tg.x} ${tg.y} ${tg.z}` : 'Target -',
-      `Mode ${this.creative ? 'creative' : 'survival'}  chunks ${this.world.chunks.size}  meshed ${this.meshes.meshedCount}  items ${this.entities.count}`,
+      `Mode ${this.creative ? 'creative' : 'survival'}  chunks ${this.world.chunks.size}  meshed ${this.meshes.meshedCount}  items ${this.entities.count}  players ${this.others.count + 1}`,
       `Seed ${this.seed}  day ${Math.floor(this.time / DAY_LENGTH_TICKS) + 1}  ${clock}`,
     ]);
   }

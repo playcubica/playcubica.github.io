@@ -193,7 +193,10 @@ async function connect(server: GameServer) {
     (server as unknown as { tick(): void }).tick();
     await flush();
   }
-  return { send: (m: ClientMsg) => c.send(m), received };
+  // Moves may not jump far (anti-cheat), so put the player at the origin with a teleport.
+  const priv = server as unknown as { players: Map<number, unknown>; teleport(p: unknown, pos: number[]): void };
+  priv.teleport([...priv.players.values()][0], [0.5, 10, 0.5]);
+  return { send: (m: ClientMsg) => c.send(m), received, tp: (pos: number[]) => priv.teleport([...priv.players.values()][0], pos) };
 }
 
 describe('host validation', () => {
@@ -257,6 +260,7 @@ describe('host validation', () => {
     const meta = newWorldMeta('t', 1, GameMode.CREATIVE);
     const server = new GameServer({ viewDistance: 2, meta, store }, flatGen);
     const p = await connect(server);
+    p.tp([3.5, 10, 3.5]);
     p.send({ t: 'move', seq: 0, x: 3.5, y: 10, z: 3.5, yaw: 1, pitch: 0, flags: 0 });
     p.send({ t: 'place', x: 5, y: 10, z: 5, raw: B.GRASS, slot: 0 });
     await flush();

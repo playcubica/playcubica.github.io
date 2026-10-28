@@ -1,5 +1,7 @@
 import type { ClientStatus } from './client/GameClient';
 import { GameSession } from './game/GameSession';
+import { inviteLink, joinHost, normalizeInviteCode } from './net/peerNetwork';
+import { sanitizeName } from './server/GameServer';
 import { GameMode, newWorldMeta, WorldStorage, type WorldMeta } from './server/storage/WorldStorage';
 import { DEFAULT_VIEW_DISTANCE } from './shared/constants';
 import { randomSeed, seedFromString } from './shared/rng';
@@ -19,6 +21,8 @@ const CONTROLS_HELP = `
     <tr><td>E</td><td>מלאי ויצירה (2×2)</td></tr>
     <tr><td>קליק ימני</td><td>פתיחת שולחן / כבשן / תיבה / דלת · אכילה</td></tr>
     <tr><td>Q</td><td>זריקת פריט (Ctrl+Q: כל הערימה)</td></tr>
+    <tr><td>T  /  /</td><td>צ'אט · פקודות</td></tr>
+    <tr><td>Tab</td><td>רשימת שחקנים (החזיקו)</td></tr>
     <tr><td>F3</td><td>מידע דיבאג</td></tr>
     <tr><td>Esc</td><td>השהיה</td></tr>
   </table>`;
@@ -31,11 +35,35 @@ function el<T extends HTMLElement = HTMLElement>(root: ParentNode, sel: string):
   return root.querySelector(sel) as T;
 }
 
+const NAME_KEY = 'cubica.name';
+
+/** The player's name, remembered in this browser. */
+function loadName(): string {
+  try {
+    const saved = sanitizeName(localStorage.getItem(NAME_KEY));
+    if (saved) return saved;
+  } catch {
+    // storage blocked: fall through
+  }
+  return `שחקן${Math.floor(100 + Math.random() * 900)}`;
+}
+
+function storeName(name: string): void {
+  try {
+    localStorage.setItem(NAME_KEY, name);
+  } catch {
+    // storage blocked: the name just isn't remembered
+  }
+}
+
 export class App {
   private readonly screen: HTMLDivElement;
   private session: GameSession | null = null;
   private storage: WorldStorage | null = null;
   private readonly viewDistance: number;
+  private playerName = loadName();
+  /** Bumped on every screen change, so delayed refreshes know if their screen is still shown. */
+  private screenToken = 0;
 
   constructor(private readonly root: HTMLElement) {
     this.screen = document.createElement('div');
@@ -58,10 +86,13 @@ export class App {
     } catch (err) {
       console.warn('IndexedDB unavailable; worlds will not be saved', err);
     }
-    this.mainMenu();
+    const join = new URLSearchParams(location.search).get('join');
+    if (join) this.joinMenu(join);
+    else this.mainMenu();
   }
 
   private show(html: string, opts: { menu?: boolean } = {}): HTMLDivElement {
+    this.screenToken++;
     this.screen.innerHTML = html;
     this.screen.style.display = '';
     this.screen.classList.toggle('menu-bg', !!opts.menu);
@@ -69,6 +100,7 @@ export class App {
   }
 
   private hide(): void {
+    this.screenToken++;
     this.screen.style.display = 'none';
   }
 
@@ -79,15 +111,28 @@ export class App {
       <div class="panel">
         <h1 class="logo">Cubica</h1>
         <p class="tagline">עולם קוביות פתוח לבנייה, חקירה והישרדות</p>
+        <label>השם שלך<input class="input" data-f="pname" maxlength="16" value="${esc(this.playerName)}"></label>
+        <p class="error" data-f="name-error" style="display:none">שם: 1–16 תווים — אותיות, ספרות, רווח, _ או -</p>
         <button class="btn" data-a="new">עולם חדש</button>
         <button class="btn" data-a="load">טען עולם</button>
         <button class="btn" data-a="join">הצטרף לחבר</button>
         ${this.storage ? '' : '<p class="warn">הדפדפן לא מאפשר שמירה (IndexedDB). אפשר לשחק, אבל העולם לא יישמר.</p>'}
-        <p class="small">גרסה 0.3 · שלב 3</p>
+        <p class="small">גרסה 0.4 · שלב 4</p>
       </div>`, { menu: true });
-    el(s, '[data-a=new]').onclick = () => this.newWorldMenu();
-    el(s, '[data-a=load]').onclick = () => void this.loadMenu();
-    el(s, '[data-a=join]').onclick = () => this.joinMenu();
+    const nameInput = el<HTMLInputElement>(s, '[data-f=pname]');
+    const nameOk = (): boolean => {
+      const n = sanitizeName(nameInput.value);
+      el(s, '[data-f=name-error]').style.display = n ? 'none' : '';
+      if (n) {
+        this.playerName = n;
+        storeName(n);
+      }
+      return !!n;
+    };
+    nameInput.oninput = () => nameOk();
+    el(s, '[data-a=new]').onclick = () => nameOk() && this.newWorldMenu();
+    el(s, '[data-a=load]').onclick = () => nameOk() && void this.loadMenu();
+    el(s, '[data-a=join]').onclick = () => nameOk() && this.joinMenu();
   }
 
   private newWorldMenu(): void {
@@ -185,17 +230,48 @@ export class App {
     };
   }
 
-  private joinMenu(): void {
+  private joinMenu(prefill = ''): void {
     const s = this.show(`
       <div class="panel">
         <h2>הצטרף לחבר</h2>
-        <label>קוד הזמנה<input class="input" disabled placeholder="ABCD-1234" dir="ltr"></label>
-        <label>השם שלך<input class="input" disabled maxlength="16"></label>
-        <button class="btn primary" disabled>הצטרף</button>
-        <p class="small">משחק עם חברים יתווסף בשלב 4.</p>
+        <label>קוד הזמנה (או הקישור שקיבלתם)<input class="input" data-f="code" placeholder="ABCD-2345" dir="ltr" value="${esc(prefill)}"></label>
+        <label>השם שלך<input class="input" data-f="pname" maxlength="16" value="${esc(this.playerName)}"></label>
+        <p class="error" data-f="error" style="display:none"></p>
+        <button class="btn primary" data-a="join">הצטרף</button>
         <button class="btn" data-a="back">חזרה</button>
+        <p class="small">החיבור ישיר בין המחשבים (WebRTC). שרת תיווך ציבורי וחינמי רק מכיר ביניהם.</p>
       </div>`, { menu: true });
-    el(s, '[data-a=back]').onclick = () => this.mainMenu();
+    const error = el(s, '[data-f=error]');
+    const button = el<HTMLButtonElement>(s, '[data-a=join]');
+    const fail = (msg: string) => {
+      error.textContent = msg;
+      error.style.display = '';
+      button.disabled = false;
+      button.textContent = 'הצטרף';
+    };
+    el(s, '[data-a=back]').onclick = () => {
+      history.replaceState(null, '', location.pathname);
+      this.mainMenu();
+    };
+    button.onclick = async () => {
+      const code = normalizeInviteCode(el<HTMLInputElement>(s, '[data-f=code]').value);
+      const name = sanitizeName(el<HTMLInputElement>(s, '[data-f=pname]').value);
+      if (!code) return fail('הקוד צריך להיות 8 תווים, למשל ABCD-2345.');
+      if (!name) return fail('שם: 1–16 תווים — אותיות, ספרות, רווח, _ או -');
+      this.playerName = name;
+      storeName(name);
+      error.style.display = 'none';
+      button.disabled = true;
+      button.textContent = 'מתחבר…';
+      try {
+        const { transport, leave } = await joinHost(code);
+        history.replaceState(null, '', location.pathname);
+        this.show('<div class="panel"><h2>מצטרף לעולם…</h2></div>', { menu: true });
+        this.session = GameSession.remote(this.root, transport, { viewDistance: this.viewDistance, playerName: name }, (st) => this.status(st), leave);
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
+    };
   }
 
   // --- In game ------------------------------------------------------------------
@@ -203,7 +279,7 @@ export class App {
   private play(meta: WorldMeta): void {
     this.show('<div class="panel"><h2>טוען עולם…</h2></div>', { menu: true });
     try {
-      this.session = new GameSession(this.root, meta, this.storage, { viewDistance: this.viewDistance, playerName: 'Player' }, (st) => this.status(st));
+      this.session = GameSession.host(this.root, meta, this.storage, { viewDistance: this.viewDistance, playerName: this.playerName }, (st) => this.status(st));
     } catch (err) {
       console.error(err);
       const s = this.show(`
@@ -237,7 +313,7 @@ export class App {
             <p>${esc(st.message)}</p>
             <p class="small">החפצים שלך נשארו במקום שבו מתת.</p>
             <button class="btn primary" data-a="respawn">חזרה לחיים</button>
-            <button class="btn" data-a="quit">שמור וצא לתפריט</button>
+            <button class="btn" data-a="quit">${session.isHost ? 'שמור וצא לתפריט' : 'התנתק'}</button>
           </div>`);
         el(s, '[data-a=respawn]').onclick = () => session.client.respawn();
         el(s, '[data-a=quit]').onclick = () => void this.exitToMenu();
@@ -256,17 +332,66 @@ export class App {
     }
   }
 
-  private pauseMenu(session: GameSession): void {
+  private pauseMenu(session: GameSession, openError = ''): void {
     const c = session.client;
+    const server = session.server;
+    const code = session.inviteCode;
+    let invite = '';
+    if (server && code) {
+      const others = server.playerCount - 1;
+      invite = `
+        <div class="invite">
+          <div>העולם פתוח לחברים · קוד הזמנה:</div>
+          <div class="invite-code">${esc(code)}</div>
+          <div class="invite-link">${esc(inviteLink(code))}</div>
+          <button class="btn small-btn" data-a="copy">העתק קישור הזמנה</button>
+          <div class="small">${others > 0 ? `מחוברים עוד ${others} שחקנים` : 'ממתין לחברים… (עד 8 שחקנים)'}</div>
+          ${session.networkProblem ? `<div class="error">${esc(session.networkProblem)}</div>` : ''}
+        </div>`;
+    } else if (server) {
+      invite = `<button class="btn" data-a="open">פתח לחברים</button>${openError ? `<p class="error">${esc(openError)}</p>` : ''}`;
+    }
     const s = this.show(`
       <div class="panel">
-        <h2>${esc(session.server.meta.name)}</h2>
+        <h2>${esc(server ? server.meta.name : 'עולם של חבר')}</h2>
         <button class="btn primary" data-a="resume">חזרה למשחק</button>
+        ${invite}
         ${c.hosting ? `<button class="btn" data-a="mode">מצב משחק: ${c.creative ? 'יצירתי' : 'הישרדות'}</button>` : ''}
-        <button class="btn" data-a="quit">שמור וצא לתפריט</button>
+        <button class="btn" data-a="quit">${server ? 'שמור וצא לתפריט' : 'התנתק'}</button>
         ${CONTROLS_HELP}
       </div>`);
     el(s, '[data-a=resume]').onclick = () => c.resume();
+    const open = s.querySelector<HTMLButtonElement>('[data-a=open]');
+    if (open) {
+      open.onclick = async () => {
+        open.disabled = true;
+        open.textContent = 'פותח…';
+        try {
+          await session.openToFriends();
+          if (this.session === session) this.pauseMenu(session);
+        } catch (err) {
+          if (this.session === session) this.pauseMenu(session, err instanceof Error ? err.message : String(err));
+        }
+      };
+    }
+    if (code) {
+      // Keep the connected-players count fresh while the menu is open.
+      const token = this.screenToken;
+      setTimeout(() => {
+        if (this.screenToken === token && this.session === session) this.pauseMenu(session);
+      }, 3000);
+    }
+    const copy = s.querySelector<HTMLButtonElement>('[data-a=copy]');
+    if (copy && code) {
+      copy.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(inviteLink(code));
+          copy.textContent = 'הועתק!';
+        } catch {
+          copy.textContent = 'סמנו והעתיקו את הקישור למעלה';
+        }
+      };
+    }
     const mode = s.querySelector<HTMLButtonElement>('[data-a=mode]');
     if (mode) {
       mode.onclick = () => {
@@ -281,7 +406,7 @@ export class App {
   private async exitToMenu(): Promise<void> {
     const session = this.session;
     this.session = null;
-    this.show('<div class="panel"><h2>שומר…</h2></div>', { menu: true });
+    this.show(`<div class="panel"><h2>${session?.isHost === false ? 'מתנתק…' : 'שומר…'}</h2></div>`, { menu: true });
     await session?.stop();
     this.mainMenu();
   }

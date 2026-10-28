@@ -197,13 +197,15 @@ export class Hud {
     this.hurtTimer = 0.45;
   }
 
-  message(text: string): void {
+  message(text: string, system = false): void {
     const m = document.createElement('div');
     m.textContent = text;
+    m.dir = 'auto';
+    if (system) m.className = 'system';
     this.messages.appendChild(m);
-    while (this.messages.children.length > 6) this.messages.firstChild!.remove();
-    setTimeout(() => m.classList.add('fade'), 7000);
-    setTimeout(() => m.remove(), 9000);
+    while (this.messages.children.length > 8) this.messages.firstChild!.remove();
+    setTimeout(() => m.classList.add('fade'), 10_000);
+    setTimeout(() => m.remove(), 12_000);
   }
 
   setVisible(v: boolean): void {

@@ -9,7 +9,7 @@ import { emptySlots, FURNACE_FUEL, FURNACE_INPUT, FURNACE_OUTPUT } from '../shar
 import { boxOverlapsBlock } from '../shared/physics/collision';
 import { EYE_HEIGHT, PLAYER_HEIGHT, PLAYER_WIDTH } from '../shared/physics/PlayerBody';
 import type { ClientMsg, ServerMsg, Vec3 } from '../shared/protocol/messages';
-import { MoveFlag } from '../shared/protocol/messages';
+import { Anim, MoveFlag } from '../shared/protocol/messages';
 import type { BlockEntity } from '../shared/world/blockEntities';
 import { Chunk, chunkKey, idx } from '../shared/world/Chunk';
 import type { Transport } from '../net/Transport';
@@ -46,6 +46,13 @@ const DEATH_MESSAGES: Record<string, string> = {
 };
 
 const posKey = (x: number, y: number, z: number) => `${x},${y},${z}`;
+
+/** 1–16 characters: letters (any script), digits, space, _ and -. */
+export function sanitizeName(name: unknown): string | null {
+  const s = String(name ?? '').replace(/\s+/g, ' ').trim();
+  if (s.length < 1 || s.length > 16 || !/^[\p{L}\p{N} _-]+$/u.test(s)) return null;
+  return s;
+}
 
 /**
  * The authoritative game simulation. Runs in the host's page; never touches the
@@ -117,25 +124,33 @@ export class GameServer {
     this.timer = null;
     for (const p of this.players.values()) this.closeWindows(p);
     await this.save();
-    for (const p of this.players.values()) p.transport.close('server stopped');
+    for (const p of [...this.players.values()]) {
+      if (!p.isHost) p.send({ t: 'kick', reason: 'המארח סגר את העולם' });
+      p.transport.close('server stopped');
+    }
     this.players.clear();
   }
 
   addConnection(transport: Transport<ServerMsg, ClientMsg>, opts: { host?: boolean } = {}): void {
     const session = new PlayerSession(this.nextPlayerId++, transport, !!opts.host);
     transport.onMessage = (msg) => {
+      session.lastSeen = performance.now();
       try {
-        this.handle(session, msg);
+        if (msg && typeof msg === 'object') this.handle(session, msg);
       } catch (err) {
         console.error('bad message from player', session.id, msg, err);
       }
     };
     transport.onClose = () => {
+      if (!this.players.has(session.id)) return;
+      this.players.delete(session.id);
       if (session.joined) {
         this.closeWindows(session);
         this.meta.players[session.name] = session.save();
+        this.broadcast({ t: 'playerLeave', id: session.id });
+        this.broadcastChat(`${session.name} יצא/ה מהעולם`);
+        this.sendPlayerList();
       }
-      this.players.delete(session.id);
     };
   }
 
@@ -150,6 +165,21 @@ export class GameServer {
 
   private chat(p: PlayerSession, text: string): void {
     p.send({ t: 'chat', from: '', text });
+  }
+
+  private broadcastChat(text: string, from = ''): void {
+    this.broadcast({ t: 'chat', from, text });
+  }
+
+  private sendPlayerList(): void {
+    const players = [...this.players.values()].filter((q) => q.joined).map((q) => ({ id: q.id, name: q.name, ping: Math.round(q.rtt), host: q.isHost }));
+    this.broadcast({ t: 'playerList', players });
+  }
+
+  /** Disconnects a player with a reason shown to them. */
+  kick(p: PlayerSession, reason: string): void {
+    p.send({ t: 'kick', reason });
+    p.transport.close(reason);
   }
 
   // --- Message handling ------------------------------------------------------
@@ -200,6 +230,15 @@ export class GameServer {
       case 'respawn':
         this.respawn(p);
         break;
+      case 'chat':
+        this.chatMessage(p, String(msg.text ?? ''));
+        break;
+      case 'pong':
+        if (p.pendingPing && p.pendingPing.id === msg.id) {
+          p.rtt = performance.now() - p.pendingPing.at;
+          p.pendingPing = null;
+        }
+        break;
       default:
         // Remaining messages arrive in later stages.
         break;
@@ -218,7 +257,21 @@ export class GameServer {
       p.transport.close('full');
       return;
     }
-    p.name = String(name).slice(0, 16) || `Player${p.id}`;
+    const clean = sanitizeName(name);
+    if (!clean) {
+      this.kick(p, 'שם לא חוקי (1–16 תווים: אותיות, ספרות, רווח, _ או -)');
+      return;
+    }
+    if ([...this.players.values()].some((q) => q.joined && q.name.toLowerCase() === clean.toLowerCase())) {
+      this.kick(p, `השם "${clean}" כבר בשימוש בעולם הזה. בחרו שם אחר.`);
+      return;
+    }
+    p.name = clean;
+    // Single-player saves from before names existed belong to the host.
+    if (p.isHost && !this.meta.players[p.name] && this.meta.players.Player) {
+      this.meta.players[p.name] = this.meta.players.Player;
+      delete this.meta.players.Player;
+    }
     const saved = this.meta.players[p.name];
     if (saved) {
       p.load(saved);
@@ -229,8 +282,10 @@ export class GameServer {
       if (p.creative) CREATIVE_KIT.forEach((id, i) => p.inventory.applyCreative(InvAction.CREATIVE_SLOT, i, 0, id));
     }
     p.fallStartY = p.pos[1];
+    p.lastMoveAt = performance.now();
     p.joined = true;
     this.players.set(p.id, p);
+    for (const q of this.players.values()) if (q !== p && q.joined) q.send({ t: 'playerJoin', player: { id: p.id, name: p.name } });
     p.send({
       t: 'welcome',
       playerId: p.id,
@@ -243,11 +298,13 @@ export class GameServer {
       gameMode: p.gameMode,
       isHost: p.isHost,
       viewDistance: this.options.viewDistance,
-      players: [...this.players.values()].map((q) => ({ id: q.id, name: q.name })),
+      players: [...this.players.values()].filter((q) => q.joined).map((q) => ({ id: q.id, name: q.name })),
     });
     p.sendInventory();
     this.sendWindow(p, null);
     p.sendStats(true);
+    if (this.players.size > 1) this.broadcastChat(`${p.name} נכנס/ה לעולם`);
+    this.sendPlayerList();
   }
 
   private inReach(p: PlayerSession, x: number, y: number, z: number): boolean {
@@ -271,9 +328,30 @@ export class GameServer {
   // --- Movement, health, hunger --------------------------------------------------
 
   private move(p: PlayerSession, x: number, y: number, z: number, yaw: number, pitch: number, flags: number): void {
-    if (![x, y, z, yaw, pitch].every(Number.isFinite)) return;
-    // Stage 4: validate speed against the previous position before accepting.
+    if (![x, y, z, yaw, pitch].every(Number.isFinite) || y < -64 || y > 512) return;
+    const now = performance.now();
+    if (p.teleportTarget) {
+      // Ignore moves the client sent before it saw the teleport.
+      const [tx, ty, tz] = p.teleportTarget;
+      if (Math.hypot(x - tx, y - ty, z - tz) > 2 && now - p.teleportAt < 5000) return;
+      p.teleportTarget = null;
+      p.lastMoveAt = now;
+    }
     const [ox, oy, oz] = p.pos;
+    // Speed check: generous limits (latency bursts, sprint-jumping); a cheat client moving
+    // faster is pulled back to its last accepted position.
+    const dt = Math.min(1, Math.max(0.05, (now - p.lastMoveAt) / 1000));
+    const fly = p.creative && (flags & MoveFlag.FLYING) !== 0;
+    const maxH = (fly ? 24 : 8) * dt + 1.5;
+    const maxUp = (fly ? 20 : 10) * dt + 1.5;
+    if (Math.hypot(x - ox, z - oz) > maxH || y - oy > maxUp) {
+      p.violations++;
+      this.teleport(p, [ox, oy, oz]);
+      return;
+    }
+    p.violations = Math.max(0, p.violations - 0.02);
+    p.lastMoveAt = now;
+    p.sneaking = (flags & MoveFlag.SNEAK) !== 0;
     const onGround = (flags & MoveFlag.ON_GROUND) !== 0;
     p.flying = p.creative && (flags & MoveFlag.FLYING) !== 0;
     if (!p.creative && !p.flying) {
@@ -381,6 +459,8 @@ export class GameServer {
 
   private teleport(p: PlayerSession, pos: Vec3): void {
     p.pos = [...pos];
+    p.teleportTarget = [...pos];
+    p.teleportAt = performance.now();
     p.fallStartY = pos[1];
     p.onGround = true;
     p.send({ t: 'teleport', x: pos[0], y: pos[1], z: pos[2] });
@@ -389,6 +469,7 @@ export class GameServer {
   // --- Breaking and placing ------------------------------------------------------
 
   private dig(p: PlayerSession, phase: number, x: number, y: number, z: number): void {
+    if (phase !== 1) p.swingUntil = performance.now() + 300;
     if (phase === 0) {
       p.dig = { x, y, z, start: performance.now() };
       return;
@@ -463,6 +544,7 @@ export class GameServer {
   }
 
   private place(p: PlayerSession, x: number, y: number, z: number, raw: number, slot: number): void {
+    p.swingUntil = performance.now() + 300;
     if (slot >= 0 && slot < HOTBAR_SIZE) p.inventory.selected = slot;
     const stack = p.inventory.held;
     const block = stack ? itemDef(stack.id)?.block : undefined;
@@ -518,6 +600,7 @@ export class GameServer {
   // --- Interactive blocks --------------------------------------------------------
 
   private useBlock(p: PlayerSession, x: number, y: number, z: number): void {
+    p.swingUntil = performance.now() + 300;
     if (!this.inReach(p, x, y, z)) return;
     const raw = this.world.getRaw(x, y, z);
     const id = raw & 0xfff;
@@ -581,6 +664,47 @@ export class GameServer {
       q.sleptAt = 0;
       q.send({ t: 'time', time: this.time });
       this.chat(q, 'הלילה עבר. בוקר טוב!');
+    }
+  }
+
+  private chatMessage(p: PlayerSession, raw: string): void {
+    const text = raw.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 200);
+    if (!text) return;
+    const now = performance.now();
+    p.chatTimes = p.chatTimes.filter((t) => now - t < 5000);
+    if (p.chatTimes.length >= 5) {
+      this.chat(p, 'לאט לאט… אפשר לשלוח עד 5 הודעות ב-5 שניות.');
+      return;
+    }
+    p.chatTimes.push(now);
+    if (text.startsWith('/')) {
+      this.command(p, text.slice(1).split(/\s+/));
+      return;
+    }
+    this.broadcastChat(text, p.name);
+  }
+
+  private command(p: PlayerSession, [cmd, ...args]: string[]): void {
+    switch (cmd) {
+      case 'help':
+        this.chat(p, 'פקודות: /list — מי מחובר · /kick שם — הוצאת שחקן (מארח בלבד)');
+        break;
+      case 'list':
+        this.chat(p, `מחוברים: ${[...this.players.values()].filter((q) => q.joined).map((q) => q.name).join(', ')}`);
+        break;
+      case 'kick': {
+        if (!p.isHost) {
+          this.chat(p, 'רק המארח יכול להוציא שחקנים.');
+          break;
+        }
+        const name = args.join(' ').toLowerCase();
+        const target = [...this.players.values()].find((q) => q.joined && q.name.toLowerCase() === name);
+        if (!target || target === p) this.chat(p, `לא נמצא שחקן בשם "${args.join(' ')}"`);
+        else this.kick(target, 'המארח הוציא אותך מהעולם');
+        break;
+      }
+      default:
+        this.chat(p, `פקודה לא מוכרת: /${cmd}. נסו /help`);
     }
   }
 
@@ -796,10 +920,23 @@ export class GameServer {
     if (this.tickCount % 20 === 0) {
       for (const p of this.players.values()) p.send({ t: 'time', time: this.time });
     }
-    for (const p of this.players.values()) {
+    const now = performance.now();
+    for (const p of [...this.players.values()]) {
+      if (now - p.lastSeen > 30_000) {
+        p.transport.close('לא התקבל מידע מהשחקן 30 שניות');
+        continue;
+      }
       this.tickPlayer(p);
       this.stream(p);
     }
+    if (this.tickCount % 2 === 0) this.sendSnapshots(now);
+    if (this.tickCount % 40 === 0) {
+      for (const p of this.players.values()) {
+        p.pendingPing = { id: this.tickCount, at: now };
+        p.send({ t: 'ping', id: this.tickCount });
+      }
+    }
+    if (this.tickCount % 100 === 0) this.sendPlayerList();
     this.items.tick(this.players.values(), this.tickCount);
     this.tickFurnaces();
     this.randomTicks();
@@ -807,8 +944,28 @@ export class GameServer {
     if (this.tickCount % AUTOSAVE_TICKS === 0) void this.save();
   }
 
+  /** Tells every player where the others are (10 Hz). */
+  private sendSnapshots(now: number): void {
+    const states = [...this.players.values()].filter((q) => q.alive).map((q) => ({
+      id: q.id,
+      x: q.pos[0],
+      y: q.pos[1],
+      z: q.pos[2],
+      yaw: q.yaw,
+      pitch: q.pitch,
+      anim: (q.sneaking ? Anim.SNEAK : 0) | (q.swingUntil > now ? Anim.SWING : 0) | (q.flying ? Anim.FLYING : 0),
+    }));
+    if (states.length < 2) return;
+    for (const p of this.players.values()) {
+      if (!p.joined) continue;
+      p.send({ t: 'snapshot', entities: states.filter((e) => e.id !== p.id) });
+    }
+  }
+
   /** Sends nearby chunks (nearest first) and tells the client to drop far ones. */
   private stream(p: PlayerSession): void {
+    // A slow connection still has data queued: don't pile more chunks on top.
+    if ((p.transport.backlog ?? 0) > 512 * 1024) return;
     const pcx = Math.floor(p.pos[0] / 16);
     const pcz = Math.floor(p.pos[2] / 16);
     let sent = 0;
