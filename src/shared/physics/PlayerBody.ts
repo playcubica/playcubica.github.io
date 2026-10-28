@@ -123,7 +123,8 @@ export class PlayerBody {
     let cy = 0;
     let cz = 0;
     if (this.inWater && !this.flying && q.getRaw) {
-      const f = waterFlow(q.getRaw, fx, Math.floor(this.y + 0.4), fz);
+      const getRaw = q.getRaw.bind(q);
+      const f = waterFlow(getRaw, fx, Math.floor(this.y + 0.4), fz);
       if (f) [cx, cy, cz] = f;
     }
     const k = 1 - Math.exp(-accel * dt);
