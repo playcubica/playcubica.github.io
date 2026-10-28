@@ -160,9 +160,7 @@ export class GameClient implements InteractionHost, WindowHost {
     };
     this.controls.onWheel = (steps) => this.selectSlot((this.inventory.selected + steps + HOTBAR_SIZE) % HOTBAR_SIZE);
     this.controls.onLockChange = (locked) => this.lockChanged(locked);
-    this.controls.onLockError = () => {
-      if (this.state === 'resuming' || this.state === 'playing') this.setState('paused');
-    };
+
 
     transport.onMessage = (msg) => {
       this.lastHostMessage = performance.now();
@@ -299,7 +297,13 @@ export class GameClient implements InteractionHost, WindowHost {
     else if (s === 'paused') this.onStatus?.({ kind: 'paused' });
   }
 
+  private freeMouseHinted = false;
+
   private lockChanged(locked: boolean): void {
+    if (locked && this.controls.freeMouse && !this.freeMouseHinted) {
+      this.freeMouseHinted = true;
+      this.hud.message('הדפדפן לא מאפשר לתפוס את העכבר — משחקים במצב עכבר חופשי: הזיזו את העכבר (או החיצים) כדי להסתכל, Esc להשהיה.', true);
+    }
     if (locked) {
       if (this.state !== 'disconnected' && this.state !== 'loading' && this.state !== 'dead') this.setState('playing');
     } else if (this.state === 'playing' || (this.state === 'resuming' && !this.chatInput.open)) {
@@ -596,6 +600,7 @@ export class GameClient implements InteractionHost, WindowHost {
     const body = this.player.body;
 
     this.processChunks();
+    this.controls.turn(dt);
     this.player.canSprint = this.creative || this.food > 6;
     if (this.state !== 'loading' && this.state !== 'disconnected' && this.state !== 'dead') this.player.update(dt);
 

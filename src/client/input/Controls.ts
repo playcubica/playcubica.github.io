@@ -21,10 +21,12 @@ export class Controls {
   yaw = 0;
   pitch = 0;
   sensitivity = 0.0022;
+  /** Input goes to the game: the pointer is captured, or the free-mouse fallback is on. */
   locked = false;
+  /** Pointer Lock was refused, so the game runs with a visible, free mouse. */
+  freeMouse = false;
+  private lockTimer: ReturnType<typeof setTimeout> | undefined;
   onLockChange: ((locked: boolean) => void) | null = null;
-  /** Pointer lock was refused (e.g. requested without a user gesture). */
-  onLockError: (() => void) | null = null;
   onKeyPress: ((code: string, e: KeyboardEvent) => void) | null = null;
   onKeyRelease: ((code: string) => void) | null = null;
   onMouseDown: ((button: number) => void) | null = null;
@@ -37,23 +39,23 @@ export class Controls {
     const opt = { signal: this.abort.signal };
     element.addEventListener('click', () => this.lock(), opt);
     document.addEventListener('pointerlockchange', () => {
-      this.locked = document.pointerLockElement === element;
-      if (!this.locked) {
-        this.down.clear();
-        this.buttons.clear();
+      if (document.pointerLockElement === element) {
+        this.freeMouse = false;
+        this.setLocked(true);
+      } else if (!this.freeMouse) {
+        this.setLocked(false);
       }
-      this.onLockChange?.(this.locked);
     }, opt);
-    document.addEventListener('pointerlockerror', () => this.onLockError?.(), opt);
+    document.addEventListener('pointerlockerror', () => this.fallBack(), opt);
     document.addEventListener('mousemove', (e) => {
       if (!this.locked) return;
       this.yaw -= e.movementX * this.sensitivity;
       this.pitch -= e.movementY * this.sensitivity;
-      const lim = Math.PI / 2 - 0.001;
-      this.pitch = Math.max(-lim, Math.min(lim, this.pitch));
+      this.clampPitch();
     }, opt);
     document.addEventListener('mousedown', (e) => {
-      if (!this.locked) return;
+      // With the free-mouse fallback, only clicks on the game itself count (not on menus).
+      if (!this.locked || (this.freeMouse && e.target !== element)) return;
       e.preventDefault();
       this.buttons.add(e.button);
       this.onMouseDown?.(e.button);
@@ -64,8 +66,10 @@ export class Controls {
       if (this.locked && e.deltaY !== 0) this.onWheel?.(Math.sign(e.deltaY));
     }, { ...opt, passive: true });
     window.addEventListener('keydown', (e) => {
-      if (e.code === KEYS.debug || e.code === KEYS.playerList || (this.locked && (e.ctrlKey || e.code === 'Space'))) e.preventDefault();
+      if (e.code === KEYS.debug || e.code === KEYS.playerList || (this.locked && (e.ctrlKey || e.code === 'Space' || e.code.startsWith('Arrow')))) e.preventDefault();
       if (!e.repeat) this.onKeyPress?.(e.code, e);
+      // Without pointer lock the browser doesn't release the mouse on Esc by itself.
+      if (e.code === 'Escape' && this.freeMouse) this.unlock();
       if (this.locked) this.down.add(e.code);
     }, opt);
     window.addEventListener('keyup', (e) => {
@@ -75,15 +79,66 @@ export class Controls {
     window.addEventListener('blur', () => { this.down.clear(); this.buttons.clear(); }, opt);
   }
 
+  /** Captures the mouse for the game; if the browser refuses, plays on with a free mouse. */
   lock(): void {
     if (this.locked) return;
-    // Safari returns undefined, Chrome a Promise that rejects if called too soon after unlocking.
-    const r = this.element.requestPointerLock() as unknown as Promise<void> | undefined;
-    r?.catch?.(() => this.onLockError?.());
+    if (typeof this.element.requestPointerLock !== 'function') {
+      this.fallBack();
+      return;
+    }
+    // Safari returns undefined, Chrome a Promise that may reject (e.g. right after leaving it,
+    // or in embedded browsers that don't allow it). Some browsers never answer at all.
+    try {
+      const r = this.element.requestPointerLock() as unknown as Promise<void> | undefined;
+      r?.catch?.(() => this.fallBack());
+    } catch {
+      this.fallBack();
+      return;
+    }
+    clearTimeout(this.lockTimer);
+    this.lockTimer = setTimeout(() => {
+      if (!this.locked) this.fallBack();
+    }, 800);
+  }
+
+  /** Free-mouse mode: input still goes to the game, the cursor stays visible. */
+  private fallBack(): void {
+    if (this.locked) return;
+    this.freeMouse = true;
+    this.element.style.cursor = 'crosshair';
+    this.setLocked(true);
   }
 
   unlock(): void {
     if (document.pointerLockElement === this.element) document.exitPointerLock();
+    else if (this.freeMouse) {
+      this.freeMouse = false;
+      this.element.style.cursor = '';
+      this.setLocked(false);
+    }
+  }
+
+  private setLocked(v: boolean): void {
+    if (this.locked === v) return;
+    this.locked = v;
+    if (!v) {
+      this.down.clear();
+      this.buttons.clear();
+    }
+    this.onLockChange?.(v);
+  }
+
+  /** Arrow keys turn the view too (handy without mouse capture). */
+  turn(dt: number): void {
+    if (!this.locked) return;
+    this.yaw += ((this.isDown('ArrowLeft') ? 1 : 0) - (this.isDown('ArrowRight') ? 1 : 0)) * 2.4 * dt;
+    this.pitch += ((this.isDown('ArrowUp') ? 1 : 0) - (this.isDown('ArrowDown') ? 1 : 0)) * 1.8 * dt;
+    this.clampPitch();
+  }
+
+  private clampPitch(): void {
+    const lim = Math.PI / 2 - 0.001;
+    this.pitch = Math.max(-lim, Math.min(lim, this.pitch));
   }
 
   isDown(code: string): boolean {
@@ -95,6 +150,7 @@ export class Controls {
   }
 
   dispose(): void {
+    clearTimeout(this.lockTimer);
     this.unlock();
     this.abort.abort();
   }

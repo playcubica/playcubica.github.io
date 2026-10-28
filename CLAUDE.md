@@ -24,8 +24,10 @@ npm run build      # tsc --noEmit + vite build -> dist/
 
 In the Claude desktop app: preview server named `cubica` (defined in `/Users/idos/אתר/.claude/launch.json`).
 In the browser console, `window.cubica` is the `App` (`cubica.session.server` / `cubica.session.client`).
-Automated browsers can't get Pointer Lock: to test, set `client.state = 'playing'` and drive
-`client.controls.down` / `client.controls.buttons` / `client.interaction.mouseDown(2)` from JS.
+When Pointer Lock is refused (embedded/automated browsers, iframes) `Controls` falls back to a
+free-mouse mode after the rejection or 800 ms: the cursor stays visible, mouse movement and the arrow keys
+look around, Esc pauses. It can also be driven from JS: `client.controls.down` / `client.controls.buttons` /
+`client.interaction.mouseDown(2)`.
 
 ## Architecture
 
