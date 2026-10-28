@@ -34,6 +34,8 @@ export interface ServerOptions {
   meta: WorldMeta;
   /** Persistence; omit for a throw-away world. */
   store?: ChunkStore;
+  /** Checks a joining player's account token (Google sign-in); omit to treat everyone as a guest. */
+  verifyAccount?: (token: string) => Promise<{ uid: string } | null>;
 }
 
 /** Chunks sent to one player per tick (keeps the channel and the client responsive). */
@@ -209,8 +211,10 @@ export class GameServer {
     this.players.clear();
   }
 
-  addConnection(transport: Transport<ServerMsg, ClientMsg>, opts: { host?: boolean } = {}): void {
+  /** `account` is the host's own signed-in account (its connection is in-page, so it is trusted). */
+  addConnection(transport: Transport<ServerMsg, ClientMsg>, opts: { host?: boolean; account?: string | null } = {}): void {
     const session = new PlayerSession(this.nextPlayerId++, transport, !!opts.host);
+    if (opts.host) session.account = opts.account ?? null;
     transport.onMessage = (msg) => {
       session.lastSeen = performance.now();
       try {
@@ -220,11 +224,12 @@ export class GameServer {
       }
     };
     transport.onClose = () => {
+      session.closed = true;
       if (!this.players.has(session.id)) return;
       this.players.delete(session.id);
       if (session.joined) {
         this.closeWindows(session);
-        this.meta.players[session.name] = session.save();
+        this.meta.players[session.saveKey] = session.save();
         this.broadcast({ t: 'playerLeave', id: session.id });
         this.broadcastChat(`${session.name} יצא/ה מהעולם`);
         this.sendPlayerList();
@@ -250,7 +255,7 @@ export class GameServer {
   }
 
   private sendPlayerList(): void {
-    const players = [...this.players.values()].filter((q) => q.joined).map((q) => ({ id: q.id, name: q.name, ping: Math.round(q.rtt), host: q.isHost }));
+    const players = [...this.players.values()].filter((q) => q.joined).map((q) => ({ id: q.id, name: q.name, ping: Math.round(q.rtt), host: q.isHost, verified: !!q.account }));
     this.broadcast({ t: 'playerList', players });
   }
 
@@ -267,7 +272,7 @@ export class GameServer {
     if (p.dead && msg.t !== 'respawn' && msg.t !== 'inv' && msg.t !== 'closeWindow') return;
     switch (msg.t) {
       case 'hello':
-        this.join(p, msg.v, msg.name);
+        this.hello(p, msg.v, msg.name, msg.token);
         break;
       case 'move':
         this.move(p, msg.x, msg.y, msg.z, msg.yaw, msg.pitch, msg.flags);
@@ -335,6 +340,25 @@ export class GameServer {
     }
   }
 
+  private hello(p: PlayerSession, version: number, name: string, token: unknown): void {
+    if (p.joined || p.verifying) return;
+    const verify = this.options.verifyAccount;
+    if (p.isHost || typeof token !== 'string' || !verify) {
+      this.join(p, version, name);
+      return;
+    }
+    p.verifying = true;
+    void verify(token)
+      .catch(() => null)
+      .then((account) => {
+        p.verifying = false;
+        if (p.closed) return;
+        p.account = account?.uid ?? null;
+        this.join(p, version, name);
+        if (!account && p.joined) this.chat(p, 'לא הצלחנו לאמת את חשבון ה-Google שלך — את/ה משחק/ת כאורח/ת בעולם הזה.');
+      });
+  }
+
   private join(p: PlayerSession, version: number, name: string): void {
     if (p.joined) return;
     if (version !== PROTOCOL_VERSION) {
@@ -356,13 +380,22 @@ export class GameServer {
       this.kick(p, `השם "${clean}" כבר בשימוש בעולם הזה. בחרו שם אחר.`);
       return;
     }
+    if (p.account && [...this.players.values()].some((q) => q.joined && q.account === p.account)) {
+      this.kick(p, 'החשבון הזה כבר מחובר לעולם.');
+      return;
+    }
     p.name = clean;
     // Single-player saves from before names existed belong to the host.
     if (p.isHost && !this.meta.players[p.name] && this.meta.players.Player) {
       this.meta.players[p.name] = this.meta.players.Player;
       delete this.meta.players.Player;
     }
-    const saved = this.meta.players[p.name];
+    // A signed-in player takes over the progress they made under this name as a guest.
+    if (p.account && !this.meta.players[p.saveKey] && this.meta.players[p.name]) {
+      this.meta.players[p.saveKey] = this.meta.players[p.name];
+      delete this.meta.players[p.name];
+    }
+    const saved = this.meta.players[p.saveKey];
     if (saved) {
       p.load(saved);
     } else {
@@ -1454,7 +1487,7 @@ export class GameServer {
     const store = this.options.store;
     if (!store) return Promise.resolve();
     const chunks = this.world.takeModified();
-    for (const p of this.players.values()) if (p.joined) this.meta.players[p.name] = p.save();
+    for (const p of this.players.values()) if (p.joined) this.meta.players[p.saveKey] = p.save();
     this.meta.time = this.time;
     this.meta.lastPlayed = Date.now();
     const meta: WorldMeta = JSON.parse(JSON.stringify(this.meta));

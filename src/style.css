@@ -684,3 +684,33 @@ body {
 .settings-row input[type='range'] {
   width: 140px;
 }
+
+/* Google account box on the main menu */
+.account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 8px;
+  text-align: right;
+}
+
+.account img {
+  width: 36px;
+  height: 36px;
+  image-rendering: auto;
+}
+
+.account .account-who {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.btn.google {
+  background: #3d6fb6;
+}
+
+.cloud-tag {
+  color: #9fd3ff;
+}

@@ -21,6 +21,12 @@ export interface OpenWindow {
 /** One connected player, as the host sees them. */
 export class PlayerSession {
   name = '';
+  /** Verified Google account (Firebase uid), or null for a guest. */
+  account: string | null = null;
+  /** Waiting for the account token check before joining. */
+  verifying = false;
+  /** The connection is gone. */
+  closed = false;
   joined = false;
   pos: Vec3 = [0, 0, 0];
   yaw = 0;
@@ -128,6 +134,11 @@ export class PlayerSession {
       if (this.saturation > 0) this.saturation = Math.max(0, this.saturation - 1);
       else this.food = Math.max(0, this.food - 1);
     }
+  }
+
+  /** Key of this player's progress in WorldMeta.players: the account for signed-in players, else the name. */
+  get saveKey(): string {
+    return this.account ? `g:${this.account}` : this.name;
   }
 
   save(): PlayerSave {

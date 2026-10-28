@@ -38,6 +38,8 @@ export interface ClientOptions {
   fov?: number;
   /** Connected to another machine's host (enables the connection watchdog). */
   remote?: boolean;
+  /** Firebase ID token proving a signed-in player's account to a remote host. */
+  token?: string | null;
 }
 
 export type ClientStatus =
@@ -257,7 +259,7 @@ export class GameClient implements InteractionHost, WindowHost {
 
   start(): void {
     this.onStatus?.({ kind: 'connecting' });
-    this.send({ t: 'hello', v: PROTOCOL_VERSION, name: this.options.name });
+    this.send({ t: 'hello', v: PROTOCOL_VERSION, name: this.options.name, ...(this.options.token ? { token: this.options.token } : {}) });
     this.send({ t: 'settings', viewDistance: this.settings.viewDistance });
     this.controls.sensitivity = 0.0022 * this.settings.sensitivity;
     this.audio.setVolumes(this.settings.sound, this.settings.music);

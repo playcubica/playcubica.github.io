@@ -122,6 +122,27 @@ export class WorldStorage {
     };
   }
 
+  /** Every saved chunk of a world, with its coordinates (for cloud uploads). */
+  async allChunks(worldId: string): Promise<Array<{ cx: number; cz: number; data: Uint8Array }>> {
+    const tx = this.db.transaction('chunks', 'readonly');
+    const store = tx.objectStore('chunks');
+    const [keys, values] = await Promise.all([req(store.getAllKeys(chunkRange(worldId))), req(store.getAll(chunkRange(worldId)))]);
+    return keys.map((k, i) => {
+      const [cx, cz] = String(k).slice(worldId.length + 1).split(',').map(Number);
+      return { cx, cz, data: values[i] as Uint8Array };
+    });
+  }
+
+  /** Replaces a world (meta + all chunks) with a copy from elsewhere (cloud download). */
+  async replaceWorld(meta: WorldMeta, chunks: Array<{ cx: number; cz: number; data: Uint8Array }>): Promise<void> {
+    const tx = this.db.transaction(['worlds', 'chunks'], 'readwrite');
+    const store = tx.objectStore('chunks');
+    store.delete(chunkRange(meta.id));
+    for (const c of chunks) store.put(c.data, `${meta.id}:${c.cx},${c.cz}`);
+    tx.objectStore('worlds').put(meta);
+    await done(tx);
+  }
+
   async exportWorld(id: string): Promise<Blob> {
     const meta = await this.getWorld(id);
     if (!meta) throw new Error('העולם לא נמצא');

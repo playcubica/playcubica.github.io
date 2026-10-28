@@ -18,7 +18,8 @@ export const MoveFlag = {
 } as const;
 
 export type ClientMsg =
-  | { t: 'hello'; v: number; name: string }
+  /** `token`: Firebase ID token of a signed-in player (the host verifies it). */
+  | { t: 'hello'; v: number; name: string; token?: string }
   | { t: 'move'; seq: number; x: number; y: number; z: number; yaw: number; pitch: number; flags: number }
   /** phase 0 = start, 1 = abort, 2 = finish */
   | { t: 'dig'; phase: 0 | 1 | 2; x: number; y: number; z: number; face: number }
@@ -58,6 +59,8 @@ export interface PlayerListEntry extends PlayerInfo {
   /** Round-trip time in ms (-1 = unknown). */
   ping: number;
   host: boolean;
+  /** Signed in with a verified Google account. */
+  verified?: boolean;
 }
 
 /** Bit flags in EntityState.anim. */

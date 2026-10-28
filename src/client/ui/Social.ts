@@ -73,7 +73,8 @@ export class PlayerListView {
       const row = document.createElement('div');
       row.className = 'pl-row';
       const name = document.createElement('span');
-      name.textContent = `${p.name}${p.host ? ' ★' : ''}${p.id === selfId ? ' (את/ה)' : ''}`;
+      name.textContent = `${p.name}${p.verified ? ' ✓' : ''}${p.host ? ' ★' : ''}${p.id === selfId ? ' (את/ה)' : ''}`;
+      if (p.verified) name.title = 'מחובר/ת עם חשבון Google';
       const ping = document.createElement('span');
       ping.className = 'pl-ping';
       ping.textContent = p.host && p.id === selfId ? '' : p.ping >= 0 ? `${p.ping}ms` : '…';

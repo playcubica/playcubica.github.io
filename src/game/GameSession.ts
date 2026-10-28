@@ -1,3 +1,6 @@
+import { firebaseConfig } from '../cloud/firebaseConfig';
+import { SyncedStore, type CloudBackend } from '../cloud/cloudWorlds';
+import { verifyIdToken } from '../cloud/verifyToken';
 import { GameClient, type ClientStatus } from '../client/GameClient';
 import type { Settings } from '../client/settings';
 import { createLocalPair } from '../net/LocalTransport';
@@ -12,6 +15,12 @@ export interface SessionOptions {
   viewDistance: number;
   playerName: string;
   settings: Settings;
+  /** Signed-in Google account (Firebase uid), if any. */
+  account?: string | null;
+  /** Remote only: ID token that proves `account` to the host. */
+  token?: string | null;
+  /** Host only: mirror the world to this cloud (signed-in players). */
+  cloud?: CloudBackend | null;
 }
 
 /**
@@ -26,6 +35,7 @@ export class GameSession {
   private readonly generator: WorkerChunkGenerator | null;
   private network: HostNetwork | null = null;
   private stopped = false;
+  private synced: SyncedStore | null = null;
 
   private constructor(server: GameServer | null, generator: WorkerChunkGenerator | null, client: GameClient, private readonly onLeave?: () => void) {
     this.server = server;
@@ -35,18 +45,28 @@ export class GameSession {
 
   static host(container: HTMLElement, meta: WorldMeta, storage: WorldStorage | null, opts: SessionOptions, onStatus: (s: ClientStatus) => void): GameSession {
     const generator = new WorkerChunkGenerator(meta.seed);
-    const server = new GameServer({ viewDistance: opts.viewDistance, meta, store: storage?.forWorld(meta.id) }, generator);
+    const local = storage?.forWorld(meta.id);
+    const synced = local && storage && opts.cloud ? new SyncedStore(local, opts.cloud, () => storage.allChunks(meta.id)) : null;
+    const projectId = firebaseConfig?.projectId;
+    const server = new GameServer({
+      viewDistance: opts.viewDistance,
+      meta,
+      store: synced ?? local,
+      verifyAccount: projectId ? (token) => verifyIdToken(token, projectId) : undefined,
+    }, generator);
     const [serverEnd, clientEnd] = createLocalPair<ServerMsg, ClientMsg>();
-    server.addConnection(serverEnd, { host: true });
+    server.addConnection(serverEnd, { host: true, account: opts.account });
     const client = new GameClient(container, clientEnd, { name: opts.playerName, settings: opts.settings });
     client.onStatus = onStatus;
     server.start();
     client.start();
-    return new GameSession(server, generator, client);
+    const session = new GameSession(server, generator, client);
+    session.synced = synced;
+    return session;
   }
 
   static remote(container: HTMLElement, transport: Transport<ClientMsg, ServerMsg>, opts: SessionOptions, onStatus: (s: ClientStatus) => void, onLeave: () => void): GameSession {
-    const client = new GameClient(container, transport, { name: opts.playerName, settings: opts.settings, remote: true });
+    const client = new GameClient(container, transport, { name: opts.playerName, settings: opts.settings, remote: true, token: opts.token });
     client.onStatus = onStatus;
     client.start();
     return new GameSession(null, null, client, onLeave);
@@ -80,8 +100,15 @@ export class GameSession {
     }
   }
 
-  save(): Promise<void> {
-    return this.server?.save() ?? Promise.resolve();
+  /** Hebrew note when the last cloud save failed (signed-in host only). */
+  get cloudProblem(): string | null {
+    return this.synced?.problem ?? null;
+  }
+
+  /** Saves locally; with `cloud`, also pushes to the cloud right away. */
+  async save(cloud = false): Promise<void> {
+    await this.server?.save();
+    if (cloud) await this.synced?.flush();
   }
 
   /** Saves (host) and tears everything down. */
@@ -91,6 +118,7 @@ export class GameSession {
     this.network?.close();
     this.client.dispose();
     await this.server?.stop();
+    await this.synced?.flush();
     this.generator?.terminate();
     this.onLeave?.();
   }
