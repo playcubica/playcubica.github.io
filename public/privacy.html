@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cubica – מדיניות פרטיות</title>
+    <link rel="icon" href="logo.png" />
+    <style>
+      body {
+        margin: 0;
+        padding: 24px 16px 48px;
+        background: #1b2433;
+        color: #eef2f7;
+        font-family: system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
+        line-height: 1.6;
+      }
+      main {
+        max-width: 680px;
+        margin: 0 auto;
+      }
+      h1 {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      h1 img {
+        width: 48px;
+        height: 48px;
+        image-rendering: pixelated;
+      }
+      a {
+        color: #9fd3ff;
+      }
+      .en {
+        direction: ltr;
+        text-align: left;
+        opacity: 0.85;
+        border-top: 1px solid #3a4658;
+        margin-top: 32px;
+        padding-top: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1><img src="logo.png" alt="" />Cubica – מדיניות פרטיות</h1>
+      <p>Cubica הוא משחק קוביות חינמי שרץ בדפדפן, בכתובת <a href="./">playcubica.github.io</a>.</p>
+
+      <h2>בלי חשבון</h2>
+      <p>אפשר לשחק בלי להתחבר. העולמות, השם וההגדרות נשמרים רק בדפדפן שלך (IndexedDB ו-localStorage), ושום מידע לא נשלח אלינו.</p>
+
+      <h2>התחברות עם Google (לא חובה)</h2>
+      <p>אם בוחרים להתחבר, Google משתפת עם המשחק את השם, כתובת המייל ותמונת הפרופיל שלך. אנחנו משתמשים בהם רק כדי:</p>
+      <ul>
+        <li>להציג לך באיזה חשבון התחברת;</li>
+        <li>לשמור את העולמות שלך בענן (Google Firebase), כך שאפשר להמשיך מכל מחשב;</li>
+        <li>להראות לחברים שמשחקים איתך שזה באמת את/ה (סימן ✓ ליד השם).</li>
+      </ul>
+      <p>המייל שלך לא מוצג לשחקנים אחרים ולא נמסר לאף אחד. רק החשבון שלך יכול לקרוא ולכתוב את העולמות שלך בענן. אנחנו לא משתמשים במידע לפרסום ולא מוכרים אותו.</p>
+
+      <h2>משחק עם חברים</h2>
+      <p>במשחק משותף המחשבים מתחברים ישירות זה לזה (WebRTC). שרת ציבורי של PeerJS עוזר להם רק למצוא זה את זה. השם שבחרת במשחק מוצג לשחקנים באותו עולם.</p>
+
+      <h2>מחיקה</h2>
+      <p>אפשר למחוק עולם (גם מהענן) בתפריט "טען עולם". להתנתקות לוחצים "התנתק". כדי לנתק את הגישה של המשחק לחשבון Google: <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener">myaccount.google.com/connections</a>. לבקשה למחוק את כל הנתונים שלך מהענן, פתחו בקשה בעמוד <a href="https://github.com/playcubica/playcubica.github.io/issues" target="_blank" rel="noopener">GitHub של המשחק</a>.</p>
+
+      <section class="en">
+        <h2>Privacy (English)</h2>
+        <p>Cubica is a free browser game. Without signing in, everything stays in your browser. If you choose to sign in with Google, the game receives your name, email address and profile picture and uses them only to show which account you are using, to save your worlds in Google Firebase so you can continue on any device, and to show friends a verified mark next to your name. Your email is never shown to other players or shared, only your account can access your cloud worlds, and nothing is used for advertising or sold. You can delete worlds in the game, sign out at any time, and revoke access at myaccount.google.com/connections. To have all your cloud data deleted, open an issue on the game's GitHub page.</p>
+      </section>
+    </main>
+  </body>
+</html>

@@ -140,7 +140,8 @@ export class App {
       case 'guest':
         return `
           <button class="btn google" data-a="signin">התחברות עם Google</button>
-          <p class="small">לא חובה. עם חשבון העולמות נשמרים בענן, ממשיכים מכל מחשב, וחברים רואים שזה באמת את/ה (✓).</p>`;
+          <p class="small">לא חובה. עם חשבון העולמות נשמרים בענן, ממשיכים מכל מחשב, וחברים רואים שזה באמת את/ה (✓).
+            Google תבקש לאשר שיתוף של השם, המייל והתמונה — הם משמשים רק לזה. <a href="privacy.html" target="_blank" rel="noopener">פרטיות</a></p>`;
       case 'signed-in': {
         const u = st.user;
         return `
