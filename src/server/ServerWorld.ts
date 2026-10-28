@@ -1,3 +1,6 @@
+import { collisionBoxes } from '../shared/blocks/registry';
+import { UNIT_BOX, type SolidQuery } from '../shared/physics/collision';
+import type { BlockEntity } from '../shared/world/blockEntities';
 import { Chunk, chunkKey, idx } from '../shared/world/Chunk';
 import { decodeChunk, encodeChunk } from '../shared/world/chunkCodec';
 import { updateLightAt } from '../shared/world/lighting';
@@ -11,12 +14,14 @@ export interface ChunkGenerator {
 }
 
 /** The host's authoritative block store. */
-export class ServerWorld {
+export class ServerWorld implements SolidQuery {
   readonly chunks = new Map<string, Chunk>();
   private readonly pending = new Set<string>();
   private readonly encoded = new Map<string, Uint8Array>();
   /** Chunks changed since the last save. */
   private readonly modified = new Set<string>();
+  /** Called when a chunk finished loading or generating. */
+  onLoad: ((c: Chunk) => void) | null = null;
   /** Changed chunks that were unloaded but whose save may not have finished yet. */
   private readonly evicted = new Map<string, Uint8Array>();
 
@@ -40,6 +45,7 @@ export class ServerWorld {
       (c) => {
         this.pending.delete(key);
         this.chunks.set(key, c);
+        this.onLoad?.(c);
       },
       (err) => {
         this.pending.delete(key);
@@ -63,18 +69,55 @@ export class ServerWorld {
     return this.generator.generate(cx, cz);
   }
 
+  /** Block id at world coords; -1 if the chunk is not loaded. */
   getBlock(x: number, y: number, z: number): number {
-    if (y < 0 || y > 255) return 0;
-    const c = this.getChunk(x >> 4, z >> 4);
-    return c ? c.blocks[idx(x & 15, y, z & 15)] & 0xfff : -1;
+    const raw = this.getRaw(x, y, z);
+    return raw < 0 ? -1 : raw & 0xfff;
   }
 
-  /** Changes a block (chunk must be loaded) and repairs light. Returns false if not loaded. */
-  setBlock(x: number, y: number, z: number, id: number): boolean {
+  /** Raw block value (id + state); -1 if the chunk is not loaded. */
+  getRaw(x: number, y: number, z: number): number {
+    if (y < 0 || y > 255) return 0;
+    const c = this.getChunk(x >> 4, z >> 4);
+    return c ? c.blocks[idx(x & 15, y, z & 15)] : -1;
+  }
+
+  /** Collision shapes (entities); unloaded chunks are solid. */
+  boxes(x: number, y: number, z: number): readonly number[] | null {
+    if (y < 0) return UNIT_BOX;
+    const raw = this.getRaw(x, y, z);
+    return raw < 0 ? UNIT_BOX : collisionBoxes(raw);
+  }
+
+  getBlockEntity(x: number, y: number, z: number): BlockEntity | undefined {
+    return this.getChunk(x >> 4, z >> 4)?.blockEntities.get(idx(x & 15, y, z & 15));
+  }
+
+  setBlockEntity(x: number, y: number, z: number, be: BlockEntity | null): void {
+    const c = this.getChunk(x >> 4, z >> 4);
+    if (!c) return;
+    if (be) c.blockEntities.set(idx(x & 15, y, z & 15), be);
+    else c.blockEntities.delete(idx(x & 15, y, z & 15));
+    this.touch(c);
+  }
+
+  /** Marks a chunk changed (e.g. a container's contents) so it is re-encoded and saved. */
+  touchAt(x: number, z: number): void {
+    const c = this.getChunk(x >> 4, z >> 4);
+    if (c) this.touch(c);
+  }
+
+  private touch(c: Chunk): void {
+    this.encoded.delete(c.key);
+    this.modified.add(c.key);
+  }
+
+  /** Changes a block (raw value; chunk must be loaded) and repairs light. Returns false if not loaded. */
+  setBlock(x: number, y: number, z: number, raw: number): boolean {
     if (y < 0 || y > 255) return false;
     const c = this.getChunk(x >> 4, z >> 4);
     if (!c) return false;
-    c.setBlock(x & 15, y, z & 15, id);
+    c.setBlock(x & 15, y, z & 15, raw);
     for (const t of updateLightAt(this, x, y, z)) {
       this.encoded.delete(t.key);
       this.modified.add(t.key);

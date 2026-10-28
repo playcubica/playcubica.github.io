@@ -16,7 +16,9 @@ const CONTROLS_HELP = `
     <tr><td>קליק ימני</td><td>הנחת בלוק</td></tr>
     <tr><td>קליק אמצעי</td><td>בחירת בלוק (יצירתי)</td></tr>
     <tr><td>1–9 / גלגלת</td><td>בחירה בסרגל</td></tr>
-    <tr><td>E</td><td>מלאי</td></tr>
+    <tr><td>E</td><td>מלאי ויצירה (2×2)</td></tr>
+    <tr><td>קליק ימני</td><td>פתיחת שולחן / כבשן / תיבה / דלת · אכילה</td></tr>
+    <tr><td>Q</td><td>זריקת פריט (Ctrl+Q: כל הערימה)</td></tr>
     <tr><td>F3</td><td>מידע דיבאג</td></tr>
     <tr><td>Esc</td><td>השהיה</td></tr>
   </table>`;
@@ -81,7 +83,7 @@ export class App {
         <button class="btn" data-a="load">טען עולם</button>
         <button class="btn" data-a="join">הצטרף לחבר</button>
         ${this.storage ? '' : '<p class="warn">הדפדפן לא מאפשר שמירה (IndexedDB). אפשר לשחק, אבל העולם לא יישמר.</p>'}
-        <p class="small">גרסה 0.2 · שלב 2</p>
+        <p class="small">גרסה 0.3 · שלב 3</p>
       </div>`, { menu: true });
     el(s, '[data-a=new]').onclick = () => this.newWorldMenu();
     el(s, '[data-a=load]').onclick = () => void this.loadMenu();
@@ -228,6 +230,19 @@ export class App {
       case 'paused':
         this.pauseMenu(session);
         break;
+      case 'dead': {
+        const s = this.show(`
+          <div class="panel death">
+            <h2>מתת!</h2>
+            <p>${esc(st.message)}</p>
+            <p class="small">החפצים שלך נשארו במקום שבו מתת.</p>
+            <button class="btn primary" data-a="respawn">חזרה לחיים</button>
+            <button class="btn" data-a="quit">שמור וצא לתפריט</button>
+          </div>`);
+        el(s, '[data-a=respawn]').onclick = () => session.client.respawn();
+        el(s, '[data-a=quit]').onclick = () => void this.exitToMenu();
+        break;
+      }
       case 'disconnected': {
         const s = this.show(`
           <div class="panel">

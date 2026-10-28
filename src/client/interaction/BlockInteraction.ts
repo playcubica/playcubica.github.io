@@ -1,22 +1,25 @@
 import * as THREE from 'three';
-import { B, OPAQUE, RENDER, REPLACEABLE, SOLID } from '../../shared/blocks/registry';
+import { B, DOOR_OPEN, DOOR_UPPER, OPAQUE, RENDER, REPLACEABLE, SOLID, withState } from '../../shared/blocks/registry';
+import { isInteractive, isSupported, placementRaw } from '../../shared/blocks/placement';
 import type { Inventory } from '../../shared/items/Inventory';
-import { breakTime, CREATIVE_BREAK_DELAY, REACH } from '../../shared/items/mining';
+import { breakTime, CREATIVE_BREAK_DELAY, EAT_TIME, REACH } from '../../shared/items/mining';
 import { itemDef } from '../../shared/items/registry';
 import { boxOverlapsBlock } from '../../shared/physics/collision';
 import { raycast, type RayHit } from '../../shared/physics/raycast';
 import { mulberry32 } from '../../shared/rng';
 import type { ClientMsg } from '../../shared/protocol/messages';
 import type { ClientWorld } from '../ClientWorld';
-import { MouseButton, type Controls } from '../input/Controls';
+import { KEYS, MouseButton, type Controls } from '../input/Controls';
 
 export interface InteractionHost {
   readonly world: ClientWorld;
   readonly inventory: Inventory;
   readonly creative: boolean;
+  /** Hunger below full (eating allowed). */
+  readonly hungry: boolean;
   send(msg: ClientMsg): void;
   /** Applies a block change locally before the host confirms it. */
-  predictBlock(x: number, y: number, z: number, id: number): void;
+  predictBlock(x: number, y: number, z: number, raw: number): void;
   playerBox(): { min: number[]; max: number[] };
   /** Creative "pick block": put this block in the hotbar. */
   pickBlock(id: number): void;
@@ -25,9 +28,9 @@ export interface InteractionHost {
 const PLACE_REPEAT = 0.22;
 const SURVIVAL_BREAK_DELAY = 0.25;
 const CRACK_STAGES = 10;
+const NEIGHBOURS = [[0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]];
 
-const targetable = (id: number) => RENDER[id] === 1 || RENDER[id] === 2;
-const needsSupport = (id: number) => RENDER[id] === 2 || id === B.CACTUS;
+const targetable = (id: number) => RENDER[id] === 1 || RENDER[id] === 2 || RENDER[id] === 4;
 
 function crackTextures(): THREE.Texture[] {
   const rnd = mulberry32(77);
@@ -62,12 +65,15 @@ function crackTextures(): THREE.Texture[] {
   return textures;
 }
 
-/** Targeting, mining (with progress and cracks), placing and picking blocks. */
+/** Targeting, mining (with progress and cracks), placing, using blocks and eating. */
 export class BlockInteraction {
   target: RayHit | null = null;
+  /** 0..1 while eating, else null. */
+  eating: number | null = null;
   private dig: { x: number; y: number; z: number; progress: number; need: number } | null = null;
   private breakCooldown = 0;
   private placeCooldown = 0;
+  private eatSlot = -1;
   private readonly outline: THREE.LineSegments;
   private readonly crack: THREE.Mesh;
   private readonly crackMaterial: THREE.MeshBasicMaterial;
@@ -106,7 +112,12 @@ export class BlockInteraction {
     if (this.controls.isButtonDown(MouseButton.LEFT) && t) this.mine(dt, t);
     else this.stopDigging();
 
-    if (this.controls.isButtonDown(MouseButton.RIGHT) && this.placeCooldown === 0) this.place();
+    const right = this.controls.isButtonDown(MouseButton.RIGHT);
+    if (right && this.canEatHeld() && !(t && this.usesBlock(t))) this.eat(dt);
+    else {
+      this.stopEating();
+      if (right && this.placeCooldown === 0 && !(t && this.usesBlock(t))) this.place();
+    }
 
     const d = this.dig;
     this.crack.visible = !!d && d.progress > 0;
@@ -117,15 +128,62 @@ export class BlockInteraction {
     }
   }
 
+  /** Right-click on this block opens/toggles it (sneak to place against it instead). */
+  private usesBlock(t: RayHit): boolean {
+    return isInteractive(t.id) && !this.controls.isDown(KEYS.sneak);
+  }
+
+  private canEatHeld(): boolean {
+    const held = this.host.inventory.held;
+    return !!held && !!itemDef(held.id)?.food && this.host.hungry && !this.host.creative;
+  }
+
   private mouseDown(button: number): void {
+    const t = this.target;
     if (button === MouseButton.RIGHT) {
-      this.placeCooldown = 0;
-      this.place();
+      if (t && this.usesBlock(t)) this.useBlock(t);
+      else if (!this.canEatHeld()) {
+        this.placeCooldown = 0;
+        this.place();
+      }
     } else if (button === MouseButton.LEFT) {
       this.breakCooldown = 0;
-    } else if (button === MouseButton.MIDDLE && this.target && this.host.creative) {
-      this.host.pickBlock(this.target.id);
+    } else if (button === MouseButton.MIDDLE && t && this.host.creative) {
+      this.host.pickBlock(t.id);
     }
+  }
+
+  private useBlock(t: RayHit): void {
+    const h = this.host;
+    h.send({ t: 'useBlock', x: t.x, y: t.y, z: t.z });
+    if (t.id === B.ASHWOOD_DOOR) {
+      const raw = h.world.getRaw(t.x, t.y, t.z);
+      const lower = (raw >>> 12) & DOOR_UPPER ? t.y - 1 : t.y;
+      for (const y of [lower, lower + 1]) {
+        const r = h.world.getRaw(t.x, y, t.z);
+        if ((r & 0xfff) === B.ASHWOOD_DOOR) h.predictBlock(t.x, y, t.z, r ^ (DOOR_OPEN << 12));
+      }
+    }
+  }
+
+  private eat(dt: number): void {
+    const inv = this.host.inventory;
+    if (this.eating === null || this.eatSlot !== inv.selected) {
+      this.stopEating();
+      this.eating = 0;
+      this.eatSlot = inv.selected;
+      this.host.send({ t: 'useItem', phase: 0, slot: inv.selected });
+    }
+    this.eating += dt / EAT_TIME;
+    if (this.eating >= 1) {
+      this.host.send({ t: 'useItem', phase: 2, slot: this.eatSlot });
+      this.eating = null;
+    }
+  }
+
+  private stopEating(): void {
+    if (this.eating !== null) this.host.send({ t: 'useItem', phase: 1, slot: this.eatSlot });
+    this.eating = null;
   }
 
   private mine(dt: number, t: RayHit): void {
@@ -158,7 +216,18 @@ export class BlockInteraction {
     const h = this.host;
     h.send({ t: 'dig', phase: 2, x, y, z, face: 0 });
     h.predictBlock(x, y, z, B.AIR);
-    if (needsSupport(h.world.getBlock(x, y + 1, z))) h.predictBlock(x, y + 1, z, B.AIR);
+    // Predict blocks that lose their support (plants, torches, the other door half).
+    const get = (a: number, b: number, c: number) => h.world.getRaw(a, b, c);
+    const queue = [[x, y, z]];
+    for (let guard = 0; queue.length > 0 && guard < 64; guard++) {
+      const [qx, qy, qz] = queue.shift()!;
+      for (const [dx, dy, dz] of NEIGHBOURS) {
+        const raw = get(qx + dx, qy + dy, qz + dz);
+        if (raw === 0 || isSupported(get, qx + dx, qy + dy, qz + dz, raw)) continue;
+        h.predictBlock(qx + dx, qy + dy, qz + dz, B.AIR);
+        queue.push([qx + dx, qy + dy, qz + dz]);
+      }
+    }
   }
 
   private stopDigging(): void {
@@ -178,16 +247,26 @@ export class BlockInteraction {
     if (block === undefined) return;
     this.placeCooldown = PLACE_REPEAT;
     // Clicking a replaceable block (tall grass…) places into it; otherwise next to the clicked face.
-    const [x, y, z] = REPLACEABLE[t.id] ? [t.x, t.y, t.z] : [t.x + t.nx, t.y + t.ny, t.z + t.nz];
-    const current = h.world.getBlock(x, y, z);
-    if (!REPLACEABLE[current] || current === block || y < 0 || y > 255) return;
-    if (needsSupport(block) && !OPAQUE[h.world.getBlock(x, y - 1, z)]) return;
+    const into = REPLACEABLE[t.id] === 1;
+    const [x, y, z] = into ? [t.x, t.y, t.z] : [t.x + t.nx, t.y + t.ny, t.z + t.nz];
+    const raw = placementRaw(block, into ? 0 : t.nx, into ? 1 : t.ny, into ? 0 : t.nz, this.controls.yaw);
+    if (raw === null || y < 0 || y > 255) return;
+    const w = h.world;
+    const current = w.getBlock(x, y, z);
+    if (!REPLACEABLE[current] || current === block) return;
+    const door = block === B.ASHWOOD_DOOR;
+    if (door) {
+      if (!OPAQUE[w.getBlock(x, y - 1, z)] || !REPLACEABLE[w.getBlock(x, y + 1, z)]) return;
+    } else if (!isSupported((a, b, c) => w.getRaw(a, b, c), x, y, z, raw)) {
+      return;
+    }
     if (SOLID[block]) {
       const { min, max } = h.playerBox();
-      if (boxOverlapsBlock(min, max, x, y, z)) return;
+      if (boxOverlapsBlock(min, max, x, y, z) || (door && boxOverlapsBlock(min, max, x, y + 1, z))) return;
     }
-    h.send({ t: 'place', x, y, z, face: 0, slot: h.inventory.selected });
-    h.predictBlock(x, y, z, block);
+    h.send({ t: 'place', x, y, z, raw, slot: h.inventory.selected });
+    h.predictBlock(x, y, z, raw);
+    if (door) h.predictBlock(x, y + 1, z, withState(block, (raw >>> 12) | DOOR_UPPER));
     if (!h.creative) h.inventory.take(h.inventory.selected, 1);
   }
 

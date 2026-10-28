@@ -1,18 +1,21 @@
-import { RENDER, TEX_SIDE, TEX_TOP } from '../../shared/blocks/registry';
+import { faceLayer, FACING_DIR, RENDER, TEX_SIDE, withState } from '../../shared/blocks/registry';
 import { itemDef } from '../../shared/items/registry';
 import { atlasTile } from '../textures/atlas';
+import { paintItem } from '../textures/itemTextures';
 import { TEX_SIZE } from '../textures/procedural';
 
-// Inventory icons: blocks are drawn as small isometric cubes from the atlas,
-// plants as flat sprites. Rendered once per item and cached as data URLs.
+// Inventory icons: blocks are drawn as small isometric cubes from the atlas;
+// plants, torches, doors and non-block items as flat sprites. Cached per item.
 
 const SIZE = 48;
-const cache = new Map<number, string>();
+const canvases = new Map<number, HTMLCanvasElement>();
+const urls = new Map<number, string>();
 let atlas: HTMLCanvasElement | null = null;
 
 export function setIconAtlas(canvas: HTMLCanvasElement): void {
   atlas = canvas;
-  cache.clear();
+  canvases.clear();
+  urls.clear();
 }
 
 /** Draws one atlas tile onto the parallelogram origin + u*s + v*t (s, t in 0..1). */
@@ -29,20 +32,34 @@ function face(g: CanvasRenderingContext2D, layer: number, o: [number, number], u
   g.restore();
 }
 
-export function itemIcon(id: number): string {
-  const hit = cache.get(id);
+function drawFlat(g: CanvasRenderingContext2D, src: CanvasImageSource, sx: number, sy: number): void {
+  g.drawImage(src, sx, sy, TEX_SIZE, TEX_SIZE, 4, 4, SIZE - 8, SIZE - 8);
+}
+
+/** The icon as a canvas (also used for item sprites in the world). */
+export function itemIconCanvas(id: number): HTMLCanvasElement {
+  const hit = canvases.get(id);
   if (hit) return hit;
   const c = document.createElement('canvas');
   c.width = c.height = SIZE;
   const g = c.getContext('2d')!;
   g.imageSmoothingEnabled = false;
-  const block = itemDef(id)?.block;
-  if (atlas && block !== undefined) {
-    if (RENDER[block] === 2) {
+  const def = itemDef(id);
+  const sprite = paintItem(id);
+  if (sprite) {
+    const tile = document.createElement('canvas');
+    tile.width = tile.height = TEX_SIZE;
+    tile.getContext('2d')!.putImageData(new ImageData(sprite.data, TEX_SIZE, TEX_SIZE), 0, 0);
+    drawFlat(g, tile, 0, 0);
+  } else if (atlas && def?.block !== undefined) {
+    const block = def.block;
+    if (def.flat || RENDER[block] === 2) {
       const [sx, sy] = atlasTile(TEX_SIDE[block]);
-      g.drawImage(atlas, sx, sy, TEX_SIZE, TEX_SIZE, 4, 4, SIZE - 8, SIZE - 8);
+      drawFlat(g, atlas, sx, sy);
     } else {
-      // Each face is drawn on its own layer so 'source-atop' darkening only hits that face.
+      // Show the block's front (if it has one) on the left face.
+      const raw = withState(block, 0);
+      const left = faceLayer(raw, FACING_DIR[0]);
       const layer = (draw: (lg: CanvasRenderingContext2D) => void) => {
         const l = document.createElement('canvas');
         l.width = l.height = SIZE;
@@ -51,12 +68,20 @@ export function itemIcon(id: number): string {
         draw(lg);
         g.drawImage(l, 0, 0);
       };
-      layer((lg) => face(lg, TEX_TOP[block], [4, 14], [20, -10], [20, 10], 0));
-      layer((lg) => face(lg, TEX_SIDE[block], [4, 14], [20, 10], [0, 22], 0.22));
-      layer((lg) => face(lg, TEX_SIDE[block], [24, 24], [20, -10], [0, 22], 0.4));
+      layer((lg) => face(lg, faceLayer(raw, 2), [4, 14], [20, -10], [20, 10], 0));
+      layer((lg) => face(lg, left, [4, 14], [20, 10], [0, 22], 0.22));
+      layer((lg) => face(lg, faceLayer(raw, 0), [24, 24], [20, -10], [0, 22], 0.4));
     }
   }
-  const url = c.toDataURL();
-  cache.set(id, url);
+  canvases.set(id, c);
+  return c;
+}
+
+export function itemIcon(id: number): string {
+  let url = urls.get(id);
+  if (!url) {
+    url = itemIconCanvas(id).toDataURL();
+    urls.set(id, url);
+  }
   return url;
 }

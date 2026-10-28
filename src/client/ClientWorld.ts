@@ -1,4 +1,5 @@
-import { B, SOLID } from '../shared/blocks/registry';
+import { B, collisionBoxes } from '../shared/blocks/registry';
+import { UNIT_BOX } from '../shared/physics/collision';
 import type { WorldQuery } from '../shared/physics/PlayerBody';
 import { Chunk, chunkKey, idx } from '../shared/world/Chunk';
 import { mergeChunkBorders, updateLightAt, type ChunkSource } from '../shared/world/lighting';
@@ -34,11 +35,11 @@ export class ClientWorld implements ChunkSource, WorldQuery {
     return c ? c.blocks[idx(x & 15, y, z & 15)] & 0xfff : 0;
   }
 
-  /** Changes a block and repairs light. Returns the chunks that need remeshing (empty if unchanged). */
-  setBlock(x: number, y: number, z: number, id: number): Set<Chunk> {
+  /** Changes a block (raw value: id + state) and repairs light. Returns the chunks that need remeshing. */
+  setBlock(x: number, y: number, z: number, raw: number): Set<Chunk> {
     const c = y >= 0 && y <= 255 ? this.getChunk(x >> 4, z >> 4) : undefined;
-    if (!c || (c.blocks[idx(x & 15, y, z & 15)] & 0xfff) === id) return new Set();
-    c.setBlock(x & 15, y, z & 15, id);
+    if (!c || c.blocks[idx(x & 15, y, z & 15)] === raw) return new Set();
+    c.setBlock(x & 15, y, z & 15, raw);
     const touched = updateLightAt(this, x, y, z);
     touched.add(c);
     return touched;
@@ -52,12 +53,19 @@ export class ClientWorld implements ChunkSource, WorldQuery {
     return c ? c.light[idx(x & 15, y, z & 15)] : 0xf0;
   }
 
-  /** Physics: solid blocks, and unloaded chunks (so nobody falls out of the world while it streams in). */
-  isSolid(x: number, y: number, z: number): boolean {
-    if (y < 0) return true;
-    if (y > 255) return false;
+  /** Physics: block shapes; unloaded chunks are solid (so nobody falls out of the world while it streams in). */
+  boxes(x: number, y: number, z: number): readonly number[] | null {
+    if (y < 0) return UNIT_BOX;
+    if (y > 255) return null;
     const c = this.getChunk(x >> 4, z >> 4);
-    return c ? SOLID[c.blocks[idx(x & 15, y, z & 15)] & 0xfff] === 1 : true;
+    return c ? collisionBoxes(c.blocks[idx(x & 15, y, z & 15)]) : UNIT_BOX;
+  }
+
+  /** Raw block value (id + state) at world coordinates. */
+  getRaw(x: number, y: number, z: number): number {
+    if (y < 0 || y > 255) return 0;
+    const c = this.getChunk(x >> 4, z >> 4);
+    return c ? c.blocks[idx(x & 15, y, z & 15)] : 0;
   }
 
   isWater(x: number, y: number, z: number): boolean {

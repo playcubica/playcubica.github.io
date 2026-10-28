@@ -1,4 +1,5 @@
 import { CHUNK_AREA, CHUNK_HEIGHT } from '../constants';
+import type { BlockEntity } from './blockEntities';
 import { Chunk } from './Chunk';
 
 // Binary chunk format, used both for IndexedDB saves and for network transfer.
@@ -6,9 +7,10 @@ import { Chunk } from './Chunk';
 //   RLE(blocks[0 .. topY*256)) as varint (runLength, value) pairs
 //   RLE(light [0 .. topY*256))
 //   heightmap[256] | biomes[256]
+//   (v2) varint count, then per block entity: varint index, varint length, UTF-8 JSON
 // Layers at y >= topY are implicit: air with full sky light.
 
-export const CHUNK_CODEC_VERSION = 1;
+export const CHUNK_CODEC_VERSION = 2;
 
 class ByteWriter {
   buf = new Uint8Array(4096);
@@ -122,13 +124,21 @@ export function encodeChunk(c: Chunk): Uint8Array {
   writeRle(w, c.light, count);
   w.bytes(c.heightmap);
   w.bytes(c.biomes);
+  w.varint(c.blockEntities.size);
+  const enc = new TextEncoder();
+  for (const [index, be] of c.blockEntities) {
+    const json = enc.encode(JSON.stringify(be));
+    w.varint(index);
+    w.varint(json.length);
+    w.bytes(json);
+  }
   return w.result();
 }
 
 export function decodeChunk(data: Uint8Array): Chunk {
   const r = new ByteReader(data);
   const version = r.u8();
-  if (version !== CHUNK_CODEC_VERSION) throw new Error(`unsupported chunk version ${version}`);
+  if (version !== 1 && version !== 2) throw new Error(`unsupported chunk version ${version}`);
   const cx = r.zigzag();
   const cz = r.zigzag();
   const topY = r.varint();
@@ -140,6 +150,15 @@ export function decodeChunk(data: Uint8Array): Chunk {
   c.light.fill(0xf0, count);
   c.heightmap.set(r.bytes(CHUNK_AREA));
   c.biomes.set(r.bytes(CHUNK_AREA));
+  if (version >= 2) {
+    const count = r.varint();
+    const dec = new TextDecoder();
+    for (let i = 0; i < count; i++) {
+      const index = r.varint();
+      const json = dec.decode(r.bytes(r.varint()));
+      if (index < 65536) c.blockEntities.set(index, JSON.parse(json) as BlockEntity);
+    }
+  }
   c.recomputeHeights();
   return c;
 }

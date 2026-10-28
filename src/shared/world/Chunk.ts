@@ -1,5 +1,6 @@
 import { CHUNK_AREA, CHUNK_VOLUME } from '../constants';
 import { OPAQUE } from '../blocks/registry';
+import type { BlockEntity } from './blockEntities';
 
 /** Index of a block inside a chunk: x fastest, then z, then y (horizontal layers are contiguous). */
 export function idx(x: number, y: number, z: number): number {
@@ -26,6 +27,8 @@ export class Chunk {
   readonly biomes: Uint8Array;
   /** Highest non-air y in the whole chunk (-1 when empty). */
   maxY = -1;
+  /** Chests, furnaces… by block index. Only the host keeps these filled in. */
+  readonly blockEntities = new Map<number, BlockEntity>();
 
   constructor(
     readonly cx: number,

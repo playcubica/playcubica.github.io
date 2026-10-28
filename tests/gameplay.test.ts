@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { B } from '../src/shared/blocks/registry';
 import { GameMode, PROTOCOL_VERSION } from '../src/shared/constants';
 import { InvAction, Inventory } from '../src/shared/items/Inventory';
+import { ContainerWindow, emptySlots } from '../src/shared/items/Window';
 import { breakTime } from '../src/shared/items/mining';
+import { itemDef, toolId } from '../src/shared/items/registry';
+import { solidFrom } from '../src/shared/physics/collision';
 import { PlayerBody, type MoveInput, type WorldQuery } from '../src/shared/physics/PlayerBody';
 import { raycast } from '../src/shared/physics/raycast';
 import { packWorldFile, unpackWorldFile } from '../src/shared/world/worldFile';
@@ -27,29 +30,29 @@ describe('inventory', () => {
 
   it('picks up, splits, places one and swaps', () => {
     const inv = new Inventory();
+    const w = new ContainerWindow('inventory', inv, emptySlots('inventory'));
+    const n = 5; // window slots before the inventory
     inv.add(B.DIRT, 10);
-    inv.apply(InvAction.CLICK, 0, 2, undefined, false); // right click: take half
+    w.apply(InvAction.CLICK, n + 0, 2); // right click: take half
     expect(inv.cursor).toEqual({ id: B.DIRT, count: 5 });
     expect(inv.slots[0]!.count).toBe(5);
-    inv.apply(InvAction.CLICK, 20, 2, undefined, false); // drop one
+    w.apply(InvAction.CLICK, n + 20, 2); // drop one
     expect(inv.slots[20]).toEqual({ id: B.DIRT, count: 1 });
     expect(inv.cursor!.count).toBe(4);
-    inv.apply(InvAction.CLICK, 0, 0, undefined, false); // merge back
+    w.apply(InvAction.CLICK, n + 0, 0); // merge back
     expect(inv.slots[0]!.count).toBe(9);
     expect(inv.cursor).toBeNull();
-    inv.apply(InvAction.SHIFT_CLICK, 0, 0, undefined, false);
+    w.apply(InvAction.SHIFT_CLICK, n + 0, 0);
     expect(inv.slots[0]).toBeNull();
     expect(inv.slots[20]!.count).toBe(10);
   });
 
-  it('refuses creative actions in survival and returns the cursor on close', () => {
+  it('only allows creative actions through applyCreative', () => {
     const inv = new Inventory();
-    expect(inv.apply(InvAction.CREATIVE_SLOT, 0, 0, B.GLASS, false)).toBe(false);
-    expect(inv.slots[0]).toBeNull();
-    expect(inv.apply(InvAction.CREATIVE_CURSOR, 0, 0, B.GLASS, true)).toBe(true);
-    inv.apply(InvAction.CLOSE, 0, 0, undefined, true);
-    expect(inv.cursor).toBeNull();
-    expect(inv.slots[0]).toEqual({ id: B.GLASS, count: 64 });
+    expect(inv.applyCreative(InvAction.CREATIVE_CURSOR, 0, 0, B.GLASS)).toBe(true);
+    expect(inv.cursor).toEqual({ id: B.GLASS, count: 64 });
+    const w = new ContainerWindow('inventory', inv, emptySlots('inventory'));
+    expect(w.apply(InvAction.CREATIVE_SLOT, 0, 0)).toBe(false);
   });
 });
 
@@ -57,7 +60,8 @@ describe('mining time', () => {
   it('depends on block, tool need and mode', () => {
     expect(breakTime(B.DIRT, undefined, false)).toBeCloseTo(0.75);
     expect(breakTime(B.STONE, undefined, false)).toBeGreaterThan(breakTime(B.DIRT, undefined, false) * 5);
-    expect(breakTime(B.STONE, { id: 9000, key: 'p', name: 'p', maxStack: 1, tool: { kind: 'pickaxe', speed: 4 } }, false)).toBeCloseTo(0.5625);
+    expect(breakTime(B.STONE, itemDef(toolId(1, 0)), false)).toBeCloseTo(0.5625); // stone pickaxe
+    expect(breakTime(B.IRON_ORE, itemDef(toolId(0, 0)), false)).toBeGreaterThan(10); // wood can't harvest iron
     expect(breakTime(B.COREROCK, undefined, false)).toBe(Infinity);
     expect(breakTime(B.COREROCK, undefined, true)).toBe(0);
   });
@@ -69,7 +73,7 @@ function flatWorld(extra: Array<[number, number, number, number]> = []): WorldQu
   const get = (x: number, y: number, z: number) => blocks.get(`${x},${y},${z}`) ?? (y < 10 ? B.STONE : B.AIR);
   return {
     get,
-    isSolid: (x, y, z) => get(x, y, z) === B.STONE,
+    ...solidFrom((x, y, z) => get(x, y, z) === B.STONE),
     isWater: (x, y, z) => get(x, y, z) === B.WATER,
   };
 }
@@ -106,7 +110,7 @@ describe('player physics', () => {
 
   it('does not walk off an edge while sneaking', () => {
     // Floor only at z >= 0 for y = 9; everything below is air.
-    const w: WorldQuery = { isSolid: (_x, y, z) => y === 9 && z >= 0, isWater: () => false };
+    const w: WorldQuery = { ...solidFrom((_x, y, z) => y === 9 && z >= 0), isWater: () => false };
     const b = new PlayerBody();
     b.x = 0.5; b.y = 10; b.z = 0.5;
     simulate(b, w, { ...idle, forward: 1, sneak: true }, 3);
@@ -115,7 +119,7 @@ describe('player physics', () => {
   });
 
   it('floats and swims up in water', () => {
-    const w: WorldQuery = { isSolid: (_x, y) => y < 0, isWater: (_x, y) => y < 20 };
+    const w: WorldQuery = { ...solidFrom((_x, y) => y < 0), isWater: (_x, y) => y < 20 };
     const b = new PlayerBody();
     b.x = 0.5; b.y = 10; b.z = 0.5;
     simulate(b, w, { ...idle, jump: true }, 2);
@@ -201,8 +205,8 @@ describe('host validation', () => {
     expect(welcome.t === 'welcome' && welcome.gameMode).toBe(GameMode.CREATIVE);
     p.send({ t: 'move', seq: 0, x: 0.5, y: 10, z: 0.5, yaw: 0, pitch: 0, flags: 0 });
     // Creative kit has grass in slot 0.
-    p.send({ t: 'place', x: 2, y: 10, z: 0, face: 0, slot: 0 });
-    p.send({ t: 'place', x: 30, y: 10, z: 0, face: 0, slot: 0 });
+    p.send({ t: 'place', x: 2, y: 10, z: 0, raw: B.GRASS, slot: 0 });
+    p.send({ t: 'place', x: 30, y: 10, z: 0, raw: B.GRASS, slot: 0 });
     await flush();
     expect(server.world.getBlock(2, 10, 0)).toBe(B.GRASS);
     expect(server.world.getBlock(30, 10, 0)).toBe(B.AIR);
@@ -214,8 +218,8 @@ describe('host validation', () => {
     const server = new GameServer({ viewDistance: 2, meta: newWorldMeta('t', 1, GameMode.CREATIVE) }, flatGen);
     const p = await connect(server);
     p.send({ t: 'move', seq: 0, x: 0.5, y: 10, z: 0.5, yaw: 0, pitch: 0, flags: 0 });
-    p.send({ t: 'place', x: 0, y: 10, z: 0, face: 0, slot: 0 });
-    p.send({ t: 'place', x: 2, y: 13, z: 2, face: 0, slot: 0 });
+    p.send({ t: 'place', x: 0, y: 10, z: 0, raw: B.GRASS, slot: 0 });
+    p.send({ t: 'place', x: 2, y: 13, z: 2, raw: B.GRASS, slot: 0 });
     await flush();
     expect(server.world.getBlock(0, 10, 0)).toBe(B.AIR);
     expect(server.world.getBlock(2, 13, 2)).toBe(B.AIR);
@@ -231,16 +235,21 @@ describe('host validation', () => {
     await flush();
     expect(server.world.getBlock(1, 9, 0)).toBe(B.STONE);
 
-    // Pretend the dig started long ago.
+    // Pretend the dig started long ago, holding a wooden pickaxe (stone by hand drops nothing).
+    const session = [...(server as unknown as { players: Map<number, { dig: { start: number }; inventory: Inventory }> }).players.values()][0];
+    session.inventory.slots[0] = { id: toolId(0, 0), count: 1 };
     p.send({ t: 'dig', phase: 0, x: 1, y: 9, z: 0, face: 1 });
     await flush();
-    const session = [...(server as unknown as { players: Map<number, { dig: { start: number } }> }).players.values()][0];
     session.dig.start -= 10_000;
     p.send({ t: 'dig', phase: 2, x: 1, y: 9, z: 0, face: 1 });
     await flush();
     expect(server.world.getBlock(1, 9, 0)).toBe(B.AIR);
+    // The drop lands as an item entity next to the player and is picked up on the next ticks.
+    for (let i = 0; i < 20; i++) (server as unknown as { tick(): void }).tick();
+    await flush();
     const inv = [...p.received].reverse().find((m) => m.t === 'inventory');
-    expect(inv && inv.t === 'inventory' && inv.state.slots[0]).toEqual({ id: B.RUBBLESTONE, count: 1 });
+    expect(inv && inv.t === 'inventory' && inv.state.slots[0]).toEqual({ id: toolId(0, 0), count: 1, dmg: 1 });
+    expect(inv && inv.t === 'inventory' && inv.state.slots[1]).toEqual({ id: B.RUBBLESTONE, count: 1 });
   });
 
   it('saves changed chunks and players, and loads them back', async () => {
@@ -249,7 +258,7 @@ describe('host validation', () => {
     const server = new GameServer({ viewDistance: 2, meta, store }, flatGen);
     const p = await connect(server);
     p.send({ t: 'move', seq: 0, x: 3.5, y: 10, z: 3.5, yaw: 1, pitch: 0, flags: 0 });
-    p.send({ t: 'place', x: 5, y: 10, z: 5, face: 0, slot: 0 });
+    p.send({ t: 'place', x: 5, y: 10, z: 5, raw: B.GRASS, slot: 0 });
     await flush();
     await server.stop();
     expect(store.chunks.has('0,0')).toBe(true);

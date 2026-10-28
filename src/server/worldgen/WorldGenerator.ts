@@ -4,6 +4,7 @@ import { fbm2, Simplex } from '../../shared/noise/simplex';
 import { hash01, hash3i, mulberry32 } from '../../shared/rng';
 import { Biome } from '../../shared/world/biomes';
 import { Chunk, idx } from '../../shared/world/Chunk';
+import { ashwoodTree, frostpineTree, type BlockSetter } from './trees';
 
 // Deterministic terrain generator: the same seed always yields the same chunk,
 // and every chunk can be generated independently (trees that cross chunk borders
@@ -280,36 +281,9 @@ export class WorldGenerator {
         }
 
         const pine = biome === Biome.SNOW || (biome === Biome.MOUNTAINS && (variant & 1) === 0);
-        if (pine) {
-          const trunk = 6 + (variant % 4);
-          const topY = h + trunk + 1;
-          for (let y = h + 3; y <= topY; y++) {
-            const k = topY - y;
-            let rad = k === 0 ? 0 : k <= 2 ? 1 : k <= 5 ? 2 : 3;
-            if (k > 1 && k % 2 === 1) rad = Math.max(1, rad - 1);
-            for (let dz = -rad; dz <= rad; dz++) {
-              for (let dx = -rad; dx <= rad; dx++) {
-                if (Math.abs(dx) + Math.abs(dz) > rad + (rad > 1 ? 1 : 0)) continue;
-                set(lx + dx, y, lz + dz, B.FROSTPINE_NEEDLES, true);
-              }
-            }
-          }
-          for (let y = 1; y <= trunk; y++) set(lx, h + y, lz, B.FROSTPINE_LOG, false);
-        } else {
-          const trunk = 4 + (variant % 3);
-          const topY = h + trunk;
-          for (let y = topY - 2; y <= topY + 1; y++) {
-            const rad = y >= topY ? 1 : 2;
-            for (let dz = -rad; dz <= rad; dz++) {
-              for (let dx = -rad; dx <= rad; dx++) {
-                const corner = Math.abs(dx) === rad && Math.abs(dz) === rad;
-                if (corner && (y === topY + 1 || hash01(seed ^ 0x1eaf, wx + dx, y, wz + dz) < 0.5)) continue;
-                set(lx + dx, y, lz + dz, B.ASHWOOD_LEAVES, true);
-              }
-            }
-          }
-          for (let y = 1; y <= trunk; y++) set(lx, h + y, lz, B.ASHWOOD_LOG, false);
-        }
+        const worldSet: BlockSetter = (x, y, z, id, onlyAir) => set(x - bx, y, z - bz, id, onlyAir);
+        if (pine) frostpineTree(worldSet, wx, h, wz, variant);
+        else ashwoodTree(worldSet, wx, h, wz, variant, seed);
         if (inside) set(lx, h, lz, B.DIRT, false);
       }
     }

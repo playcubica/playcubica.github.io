@@ -146,7 +146,7 @@ export class ChunkMeshManager {
     if (!buf) return null;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Int16BufferAttribute(buf.pos, 3));
-    geo.setAttribute('aTex', new THREE.Uint8BufferAttribute(buf.tex, 4));
+    geo.setAttribute('aTex', new THREE.Uint16BufferAttribute(buf.tex, 4));
     geo.setAttribute('aLight', new THREE.Uint8BufferAttribute(buf.light, 4));
     geo.setIndex(new THREE.BufferAttribute(buf.index, 1));
     // Geometry is in 1/16-block units; bounds must match for frustum culling.

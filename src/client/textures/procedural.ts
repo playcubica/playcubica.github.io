@@ -145,6 +145,26 @@ function planks(base: RGB) {
   };
 }
 
+function brickStone(p: Pixmap, r: Rand, base: RGB): void {
+  for (let y = 0; y < TEX_SIZE; y++) {
+    const row = y >> 2;
+    for (let x = 0; x < TEX_SIZE; x++) {
+      const mortar = y % 4 === 3 || (x + (row % 2) * 4) % 8 === 7;
+      p.set(x, y, mortar ? shade(base, 0.62) : shade(base, 0.92 + r() * 0.14));
+    }
+  }
+}
+
+function furnaceMouth(p: Pixmap, lit: boolean): void {
+  for (let y = 8; y <= 13; y++) for (let x = 4; x <= 11; x++) {
+    const edge = y === 8 || x === 4 || x === 11;
+    if (edge) p.set(x, y, [60, 56, 54]);
+    else if (lit) p.set(x, y, y >= 11 ? [255, 190, 60] : y === 10 ? [240, 120, 30] : [120, 40, 20]);
+    else p.set(x, y, [26, 24, 24]);
+  }
+  for (let x = 3; x <= 12; x++) p.set(x, 7, [96, 92, 88]);
+}
+
 const PAINTERS: Record<string, (p: Pixmap, r: Rand) => void> = {
   stone,
   dirt,
@@ -317,6 +337,100 @@ const PAINTERS: Record<string, (p: Pixmap, r: Rand) => void> = {
     for (let t = 0; t < 4; t++) {
       p.set(3 + t, 6 - t, [240, 250, 255]);
       p.set(9 + t, 12 - t, [240, 250, 255]);
+    }
+  },
+  workbench_top(p, r) {
+    planks([186, 150, 100])(p, r);
+    for (let t = 0; t < TEX_SIZE; t++) {
+      p.set(t, 0, [110, 80, 50]); p.set(t, 15, [110, 80, 50]); p.set(0, t, [110, 80, 50]); p.set(15, t, [110, 80, 50]);
+    }
+    // Tools laid out on the bench: a saw blade and a mallet.
+    for (let x = 3; x <= 9; x++) p.set(x, 4, [190, 194, 200]);
+    for (let x = 3; x <= 9; x += 2) p.set(x, 5, [150, 154, 160]);
+    for (let y = 8; y <= 12; y++) p.set(11, y, [96, 66, 36]);
+    for (let x = 9; x <= 13; x++) { p.set(x, 7, [130, 96, 58]); p.set(x, 8, [130, 96, 58]); }
+  },
+  workbench_side(p, r) {
+    planks([178, 142, 94])(p, r);
+    for (let x = 0; x < TEX_SIZE; x++) { p.set(x, 0, [120, 88, 54]); p.set(x, 1, [150, 116, 74]); }
+    for (let y = 4; y < 14; y++) { p.set(2, y, [96, 70, 44]); p.set(13, y, [96, 70, 44]); }
+    for (let x = 4; x <= 11; x++) p.set(x, 8, [96, 70, 44]);
+  },
+  furnace_top: (p, r) => brickStone(p, r, [118, 112, 108]),
+  furnace_side: (p, r) => brickStone(p, r, [124, 118, 112]),
+  furnace_front(p, r) {
+    brickStone(p, r, [124, 118, 112]);
+    furnaceMouth(p, false);
+  },
+  furnace_front_lit(p, r) {
+    brickStone(p, r, [124, 118, 112]);
+    furnaceMouth(p, true);
+  },
+  chest_top(p, r) {
+    planks([160, 112, 60])(p, r);
+    for (let t = 0; t < TEX_SIZE; t++) { p.set(t, 0, [90, 60, 30]); p.set(t, 15, [90, 60, 30]); p.set(0, t, [90, 60, 30]); p.set(15, t, [90, 60, 30]); }
+  },
+  chest_side(p, r) {
+    planks([160, 112, 60])(p, r);
+    for (let t = 0; t < TEX_SIZE; t++) { p.set(t, 0, [90, 60, 30]); p.set(t, 15, [90, 60, 30]); p.set(t, 5, [90, 60, 30]); }
+  },
+  chest_front(p, r) {
+    PAINTERS.chest_side(p, r);
+    for (let y = 4; y <= 8; y++) for (let x = 6; x <= 9; x++) p.set(x, y, y === 4 || y === 8 || x === 6 || x === 9 ? [70, 70, 76] : [200, 200, 208]);
+    p.set(7, 7, [40, 40, 44]);
+  },
+  bedroll_top(p, r) {
+    speckle(p, r, [176, 64, 58], 0.05);
+    for (let y = 0; y < 5; y++) for (let x = 1; x < 15; x++) p.set(x, y, shade([236, 232, 220], 0.95 + r() * 0.05));
+    for (let x = 0; x < TEX_SIZE; x++) { p.set(x, 5, [140, 46, 42]); if (x % 4 === 1) p.set(x, 10, [140, 46, 42]); }
+  },
+  bedroll_side(p, r) {
+    planks([160, 120, 74])(p, r);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < TEX_SIZE; x++) p.set(x, y, shade([176, 64, 58], 0.9 + r() * 0.1));
+    for (let x = 0; x < TEX_SIZE; x++) p.set(x, 7, [130, 44, 40]);
+  },
+  torch(p) {
+    plantBase(p);
+    // Stick columns at 0-1, 7-8 and 14-15 so standing and wall torches all find them.
+    for (const c of [0, 7, 14]) {
+      for (let y = 6; y < TEX_SIZE; y++) {
+        p.set(c, y, [118, 84, 46]);
+        p.set(c + 1, y, [92, 64, 34]);
+      }
+      p.set(c, 6, [255, 240, 150]); p.set(c + 1, 6, [255, 210, 90]);
+      p.set(c, 7, [255, 200, 70]); p.set(c + 1, 7, [240, 150, 40]);
+      p.set(c, 8, [230, 120, 40]); p.set(c + 1, 8, [200, 90, 30]);
+    }
+  },
+  door_lower(p, r) {
+    planks([176, 150, 108])(p, r);
+    for (let t = 0; t < TEX_SIZE; t++) { p.set(t, 15, [120, 92, 60]); p.set(0, t, [120, 92, 60]); p.set(15, t, [120, 92, 60]); }
+    for (let x = 3; x <= 12; x++) { p.set(x, 3, [130, 100, 66]); p.set(x, 11, [130, 100, 66]); }
+    p.set(12, 1, [60, 50, 40]); p.set(13, 1, [60, 50, 40]);
+  },
+  door_upper(p, r) {
+    planks([176, 150, 108])(p, r);
+    for (let t = 0; t < TEX_SIZE; t++) { p.set(t, 0, [120, 92, 60]); p.set(0, t, [120, 92, 60]); p.set(15, t, [120, 92, 60]); }
+    for (let y = 3; y <= 11; y++) for (let x = 3; x <= 12; x++) {
+      const bar = x === 7 || x === 8 || y === 7;
+      p.set(x, y, bar ? [120, 92, 60] : [160, 200, 222], bar ? 255 : 0);
+    }
+  },
+  ashwood_sapling(p, r) {
+    plantBase(p);
+    stem(p, 7, 8, [110, 90, 60]);
+    for (let n = 0; n < 22; n++) {
+      const x = 4 + Math.floor(r() * 8);
+      const y = 2 + Math.floor(r() * 8);
+      p.set(x, y, shade([74, 138, 52], 0.8 + r() * 0.4));
+    }
+  },
+  frostpine_sapling(p, r) {
+    plantBase(p);
+    stem(p, 7, 9, [90, 62, 42]);
+    for (let y = 2; y < 11; y++) {
+      const w = Math.floor((y - 1) / 2);
+      for (let x = 7 - w; x <= 8 + w; x++) if (r() < 0.8) p.set(x, y, shade([44, 98, 76], 0.85 + r() * 0.3));
     }
   },
   cut_stone(p, r) {

@@ -1,12 +1,12 @@
-import { CULL_SAME, OPAQUE, RENDER, TEX_BOTTOM, TEX_SIDE, TEX_TOP, TRANSLUCENT } from '../blocks/registry';
+import { blockShape, CULL_SAME, faceLayer, OPAQUE, RENDER, TEX_SIDE, TRANSLUCENT } from '../blocks/registry';
 
 // Greedy mesher for one chunk. Input is a padded volume: the chunk plus a one-block
 // ring of its neighbours, so faces and smooth lighting at the edges are correct.
 //   padded index = (x+1) + (z+1)*18 + y*324, x/z in [-1, 16], y in [0, height)
 //
-// Vertex format (16 bytes):
+// Vertex format (20 bytes):
 //   position Int16×3 in 1/16 block units (the mesh is scaled by 1/16)
-//   tex      Uint8×4 (u, v in blocks, texture layer, face shade 0..255)
+//   tex      Uint16×4 (u, v in 1/16 block units, texture layer, face shade 0..255)
 //   light    Uint8×4 (sky 0..15, block 0..15, ambient occlusion 0..3, unused)
 
 export const PAD = 18;
@@ -21,7 +21,7 @@ export interface MeshInput {
 
 export interface MeshBuffers {
   pos: Int16Array;
-  tex: Uint8Array;
+  tex: Uint16Array;
   light: Uint8Array;
   index: Uint32Array | Uint16Array;
 }
@@ -39,14 +39,14 @@ export function paddedIndex(x: number, y: number, z: number): number {
 
 class Builder {
   private pos = new Int16Array(4096 * 3);
-  private tex = new Uint8Array(4096 * 4);
+  private tex = new Uint16Array(4096 * 4);
   private light = new Uint8Array(4096 * 4);
   private index = new Uint32Array(4096 * 6 / 4);
   verts = 0;
   private indices = 0;
 
   private grow(): void {
-    const g = <T extends Int16Array | Uint8Array | Uint32Array>(a: T): T => {
+    const g = <T extends Int16Array | Uint16Array | Uint8Array | Uint32Array>(a: T): T => {
       const n = new (a.constructor as new (len: number) => T)(a.length * 2);
       n.set(a);
       return n;
@@ -150,7 +150,7 @@ export function buildChunkMesh(input: MeshInput): MeshOutput {
         if (axis === 1) p[1] -= WATER_DROP;
         else if (vc === v1) p[1] -= WATER_DROP;
       }
-      b.vertex(p[0], p[1], p[2], uc - u0, vc - v0, layer, SHADE[dir], cSky[k], cBlk[k], cAo[k]);
+      b.vertex(p[0], p[1], p[2], (uc - u0) * 16, (vc - v0) * 16, layer, SHADE[dir], cSky[k], cBlk[k], cAo[k]);
     }
     const front = CROSS[dir] * SIGN[dir] > 0;
     // Split along the diagonal whose corners are brighter, to avoid AO artefacts.
@@ -185,7 +185,8 @@ export function buildChunkMesh(input: MeshInput): MeshOutput {
           const x = pos[0];
           const y = pos[1];
           const z = pos[2];
-          const id = blocks[paddedIndex(x, y, z)] & 0xfff;
+          const raw = blocks[paddedIndex(x, y, z)];
+          const id = raw & 0xfff;
           const r = RENDER[id];
           if (r !== 1 && r !== 3) continue;
           n[0] = x; n[1] = y; n[2] = z;
@@ -198,7 +199,7 @@ export function buildChunkMesh(input: MeshInput): MeshOutput {
           if (translucent && TRANSLUCENT[nid]) continue;
           if (CULL_SAME[id] && nid === id) continue;
           const mesh = translucent ? 1 : 0;
-          const layer = axis === 1 ? (sign > 0 ? TEX_TOP[id] : TEX_BOTTOM[id]) : TEX_SIDE[id];
+          const layer = faceLayer(raw, dir);
           const waterTop = r === 3 && blockAt(x, y + 1, z) !== id;
 
           let uniform: boolean;
@@ -293,13 +294,60 @@ export function buildChunkMesh(input: MeshInput): MeshOutput {
         for (const [ax, az, bx, bz] of diagonals) {
           const base = ob.verts;
           ob.vertex(ax, y0, az, 0, 0, layer, 230, l >> 4, l & 15, 3);
-          ob.vertex(bx, y0, bz, 1, 0, layer, 230, l >> 4, l & 15, 3);
-          ob.vertex(bx, y1, bz, 1, 1, layer, 230, l >> 4, l & 15, 3);
-          ob.vertex(ax, y1, az, 0, 1, layer, 230, l >> 4, l & 15, 3);
+          ob.vertex(bx, y0, bz, 16, 0, layer, 230, l >> 4, l & 15, 3);
+          ob.vertex(bx, y1, bz, 16, 16, layer, 230, l >> 4, l & 15, 3);
+          ob.vertex(ax, y1, az, 0, 16, layer, 230, l >> 4, l & 15, 3);
           ob.tri(base, base + 1, base + 2);
           ob.tri(base, base + 2, base + 3);
           ob.tri(base, base + 2, base + 1);
           ob.tri(base, base + 3, base + 2);
+        }
+      }
+    }
+  }
+
+  // Box-shaped blocks (doors, chests, torches, bedrolls): un-merged faces, lit by their own cell.
+  for (let y = 0; y < meshH; y++) {
+    for (let z = 0; z < 16; z++) {
+      for (let x = 0; x < 16; x++) {
+        const raw = blocks[paddedIndex(x, y, z)];
+        if (RENDER[raw & 0xfff] !== 4) continue;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        const l = lightAt(x, y, z);
+        for (const bx of blockShape(raw)) {
+          for (let dir = 0; dir < 6; dir++) {
+            const axis = AXIS[dir];
+            const ua = U_AXIS[dir];
+            const va = V_AXIS[dir];
+            const sign = SIGN[dir];
+            const planePx = sign > 0 ? bx[axis + 3] : bx[axis];
+            // A face on the block boundary is hidden by an opaque neighbour.
+            if (planePx === 0 || planePx === 16) {
+              n[0] = x; n[1] = y; n[2] = z;
+              n[axis] += sign;
+              if (OPAQUE[blockAt(n[0], n[1], n[2])]) continue;
+            }
+            const layer = faceLayer(raw, dir);
+            const base = ob.verts;
+            const origin = [x * 16, y * 16, z * 16];
+            for (let k = 0; k < 4; k++) {
+              const uc = k === 0 || k === 3 ? bx[ua] : bx[ua + 3];
+              const vc = k === 0 || k === 1 ? bx[va] : bx[va + 3];
+              const p = [0, 0, 0];
+              p[axis] = origin[axis] + planePx;
+              p[ua] = origin[ua] + uc;
+              p[va] = origin[va] + vc;
+              ob.vertex(p[0], p[1], p[2], uc, vc, layer, SHADE[dir], l >> 4, l & 15, 3);
+            }
+            if (CROSS[dir] * sign > 0) {
+              ob.tri(base, base + 1, base + 2);
+              ob.tri(base, base + 2, base + 3);
+            } else {
+              ob.tri(base, base + 2, base + 1);
+              ob.tri(base, base + 3, base + 2);
+            }
+          }
         }
       }
     }

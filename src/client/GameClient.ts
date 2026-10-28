@@ -3,6 +3,7 @@ import { Renderer } from './render/Renderer';
 import { blockDef } from '../shared/blocks/registry';
 import { DAY_LENGTH_TICKS, GameMode, PROTOCOL_VERSION, TICKS_PER_SECOND } from '../shared/constants';
 import { HOTBAR_SIZE, InvAction, Inventory } from '../shared/items/Inventory';
+import { ContainerWindow, emptySlots } from '../shared/items/Window';
 import type { ClientMsg, ServerMsg } from '../shared/protocol/messages';
 import { MoveFlag } from '../shared/protocol/messages';
 import { BIOME_NAMES } from '../shared/world/biomes';
@@ -18,8 +19,9 @@ import { DebugOverlay } from './ui/debugOverlay';
 import { LocalPlayer } from './player/LocalPlayer';
 import { BlockInteraction, type InteractionHost } from './interaction/BlockInteraction';
 import { Hud } from './ui/Hud';
-import { InventoryScreen, type InventoryHost } from './ui/InventoryScreen';
+import { WindowScreen, type OpenWindowState, type WindowHost } from './ui/WindowScreen';
 import { setIconAtlas } from './ui/icons';
+import { EntityRenderer } from './render/EntityRenderer';
 
 export interface ClientOptions {
   name: string;
@@ -30,16 +32,17 @@ export type ClientStatus =
   | { kind: 'connecting' }
   | { kind: 'playing' }
   | { kind: 'paused' }
+  | { kind: 'dead'; message: string }
   | { kind: 'disconnected'; reason: string };
 
-type UiState = 'loading' | 'playing' | 'paused' | 'inventory' | 'resuming' | 'disconnected';
+type UiState = 'loading' | 'playing' | 'paused' | 'window' | 'resuming' | 'dead' | 'disconnected';
 
 /** Max milliseconds per frame spent decoding and lighting incoming chunks. */
 const CHUNK_BUDGET_MS = 4;
 const UNDERWATER_FOG = new THREE.Color(0.06, 0.2, 0.42);
 
 /** Renders the world the host streams to it, runs the local player, and sends input back. */
-export class GameClient implements InteractionHost, InventoryHost {
+export class GameClient implements InteractionHost, WindowHost {
   readonly renderer: Renderer;
   readonly world = new ClientWorld();
   readonly controls: Controls;
@@ -51,10 +54,22 @@ export class GameClient implements InteractionHost, InventoryHost {
   private readonly sky = new Sky();
   private readonly debug: DebugOverlay;
   private readonly hud: Hud;
-  private readonly invScreen: InventoryScreen;
+  private readonly windowScreen: WindowScreen;
+  private readonly entities: EntityRenderer;
+  /** The player's own window (2×2 crafting) and an open container, if any. */
+  private readonly ownWindow: OpenWindowState = { id: 0, kind: 'inventory', slots: emptySlots('inventory') };
+  private container: OpenWindowState | null = null;
+  private health = 20;
+  private food = 20;
+  private air = 300;
+  private shake = 0;
   private readonly player: LocalPlayer;
   private readonly interaction: BlockInteraction;
-  private readonly chunkQueue: Array<Extract<ServerMsg, { t: 'chunk' }>> = [];
+  /**
+   * Chunk data, block changes and unloads, applied strictly in arrival order (a block
+   * change must not be applied before the chunk it belongs to has been decoded).
+   */
+  private readonly worldQueue: Array<Extract<ServerMsg, { t: 'chunk' | 'blockChange' | 'unloadChunk' }>> = [];
   private state: UiState = 'loading';
   private gameMode: number = GameMode.SURVIVAL;
   private isHost = false;
@@ -88,7 +103,8 @@ export class GameClient implements InteractionHost, InventoryHost {
     this.player = new LocalPlayer(this.world, this.controls);
     this.interaction = new BlockInteraction(this.renderer.scene, this, this.controls);
     this.hud = new Hud(container);
-    this.invScreen = new InventoryScreen(container, this);
+    this.windowScreen = new WindowScreen(container, this);
+    this.entities = new EntityRenderer(this.renderer.scene, this.world);
     this.debug = new DebugOverlay(container);
 
     this.controls.onKeyPress = (code) => this.keyPressed(code);
@@ -112,6 +128,14 @@ export class GameClient implements InteractionHost, InventoryHost {
     return this.isHost;
   }
 
+  get hungry(): boolean {
+    return this.food < 20;
+  }
+
+  get currentWindow(): OpenWindowState {
+    return this.container ?? this.ownWindow;
+  }
+
   send(msg: ClientMsg): void {
     this.transport.send(msg);
   }
@@ -128,14 +152,22 @@ export class GameClient implements InteractionHost, InventoryHost {
     const inv = this.inventory;
     const existing = inv.slots.findIndex((s, i) => i < HOTBAR_SIZE && s?.id === id);
     if (existing >= 0) this.selectSlot(existing);
-    else this.invAction(InvAction.CREATIVE_SLOT, inv.selected, 0, id);
+    else {
+      this.inventory.applyCreative(InvAction.CREATIVE_SLOT, inv.selected, 0, id);
+      this.send({ t: 'inv', window: 0, action: InvAction.CREATIVE_SLOT, slot: inv.selected, button: 0, item: id });
+    }
   }
 
-  invAction(action: number, slot: number, button: number, item?: number): void {
-    // Predict locally with the same code the host runs; the host's snapshot follows.
-    this.inventory.apply(action, slot, button, item, this.creative);
-    this.send({ t: 'inv', action, slot, button, item });
-    this.invScreen.render();
+  windowAction(action: number, slot: number, button: number, item?: number): void {
+    // Predict locally with the same code the host runs; the host's snapshots follow.
+    const w = this.currentWindow;
+    if (action === InvAction.CREATIVE_CURSOR || action === InvAction.CREATIVE_SLOT) {
+      if (this.creative) this.inventory.applyCreative(action, slot, button, item);
+    } else {
+      new ContainerWindow(w.kind, this.inventory, w.slots).apply(action, slot, button);
+    }
+    this.send({ t: 'inv', window: w.id, action, slot, button, item });
+    this.windowScreen.render();
   }
 
   // --- Lifecycle / UI state ---------------------------------------------------
@@ -153,9 +185,17 @@ export class GameClient implements InteractionHost, InventoryHost {
 
   /** Called from a click (user gesture) to enter the game. */
   resume(): void {
-    if (this.state === 'disconnected' || this.state === 'loading') return;
-    if (this.invScreen.open) this.closeInventory(false);
+    if (this.state === 'disconnected' || this.state === 'loading' || this.state === 'dead') return;
+    if (this.windowScreen.open) this.closeWindow(false);
     this.setState('resuming');
+    this.controls.lock();
+  }
+
+  /** Called from the death screen's button (a user gesture, so the pointer can lock again). */
+  respawn(): void {
+    if (this.state !== 'dead') return;
+    this.send({ t: 'respawn' });
+    this.state = 'resuming';
     this.controls.lock();
   }
 
@@ -172,7 +212,7 @@ export class GameClient implements InteractionHost, InventoryHost {
 
   private lockChanged(locked: boolean): void {
     if (locked) {
-      if (this.state !== 'disconnected' && this.state !== 'loading') this.setState('playing');
+      if (this.state !== 'disconnected' && this.state !== 'loading' && this.state !== 'dead') this.setState('playing');
     } else if (this.state === 'playing' || this.state === 'resuming') {
       this.setState('paused');
     }
@@ -180,29 +220,42 @@ export class GameClient implements InteractionHost, InventoryHost {
 
   private keyPressed(code: string): void {
     if (code === KEYS.debug) this.debug.toggle();
-    if (this.state === 'inventory') {
-      if (code === KEYS.inventory || code === 'Escape') this.closeInventory(code === KEYS.inventory);
+    if (this.state === 'window') {
+      if (code === KEYS.inventory || code === 'Escape') this.closeWindow(code === KEYS.inventory);
       return;
     }
     if (this.state !== 'playing') return;
     if (code === KEYS.inventory) {
-      this.openInventory();
+      this.openWindowScreen();
       return;
+    }
+    if (code === 'KeyQ' && this.inventory.held) {
+      const all = this.controls.isDown(KEYS.sprint);
+      this.send({ t: 'drop', all });
+      this.inventory.take(this.inventory.selected, all ? this.inventory.held.count : 1);
     }
     const digit = /^Digit([1-9])$/.exec(code);
     if (digit) this.selectSlot(Number(digit[1]) - 1);
     this.player.keyPressed(code);
   }
 
-  private openInventory(): void {
-    this.state = 'inventory';
+  private openWindowScreen(): void {
+    this.state = 'window';
     this.controls.unlock();
-    this.invScreen.show();
+    this.windowScreen.show();
   }
 
-  private closeInventory(relock: boolean): void {
-    this.invAction(InvAction.CLOSE, 0, 0);
-    this.invScreen.hide();
+  private closeWindow(relock: boolean): void {
+    const w = this.currentWindow;
+    this.send({ t: 'closeWindow', window: w.id });
+    // Predict: crafting leftovers and the cursor stack return to the inventory.
+    if (w.kind === 'inventory' || w.kind === 'workbench') new ContainerWindow(w.kind, this.inventory, w.slots).returnGrid();
+    if (this.inventory.cursor) {
+      this.inventory.addStack(this.inventory.cursor);
+      this.inventory.cursor = null;
+    }
+    this.container = null;
+    this.windowScreen.hide();
     if (relock) {
       this.state = 'resuming';
       this.controls.lock();
@@ -212,7 +265,7 @@ export class GameClient implements InteractionHost, InventoryHost {
   }
 
   private selectSlot(i: number): void {
-    if (i === this.inventory.selected) return;
+    if (i === this.inventory.selected || this.state === 'window') return;
     this.inventory.selected = i;
     this.send({ t: 'held', slot: i });
   }
@@ -231,7 +284,8 @@ export class GameClient implements InteractionHost, InventoryHost {
     this.interaction.dispose();
     this.meshes.dispose();
     this.hud.dispose();
-    this.invScreen.dispose();
+    this.windowScreen.dispose();
+    this.entities.dispose();
     this.debug.el.remove();
     this.renderer.dispose();
   }
@@ -257,26 +311,72 @@ export class GameClient implements InteractionHost, InventoryHost {
         this.onStatus?.({ kind: 'paused' });
         break;
       case 'chunk':
-        this.chunkQueue.push(msg);
+      case 'unloadChunk':
+        this.worldQueue.push(msg);
         break;
-      case 'unloadChunk': {
-        const i = this.chunkQueue.findIndex((m) => m.cx === msg.cx && m.cz === msg.cz);
-        if (i >= 0) this.chunkQueue.splice(i, 1);
-        this.world.remove(msg.cx, msg.cz);
-        this.meshes.remove(msg.cx, msg.cz);
-        break;
-      }
       case 'blockChange':
-        this.applyBlock(msg.x, msg.y, msg.z, msg.id);
+        if (this.worldQueue.length === 0) this.applyBlock(msg.x, msg.y, msg.z, msg.id);
+        else this.worldQueue.push(msg);
         break;
       case 'inventory':
         this.inventory.load(msg.state);
-        this.invScreen.render();
+        this.windowScreen.render();
+        break;
+      case 'window':
+        if (msg.id === 0) {
+          this.ownWindow.slots.splice(0, this.ownWindow.slots.length, ...msg.slots);
+        } else {
+          const fresh = !this.container || this.container.id !== msg.id;
+          this.container = { id: msg.id, kind: msg.kind, slots: msg.slots, progress: msg.progress };
+          if (fresh && this.state !== 'dead') {
+            if (this.state === 'window') this.windowScreen.hide();
+            this.openWindowScreen();
+          }
+        }
+        this.windowScreen.render();
+        break;
+      case 'closeWindow':
+        if (this.container?.id === msg.id) {
+          this.container = null;
+          this.windowScreen.hide();
+          if (this.state === 'window') this.setState('paused');
+        }
         break;
       case 'gameMode':
         this.gameMode = msg.mode;
         this.player.canFly = this.creative;
-        this.invScreen.render();
+        this.windowScreen.render();
+        break;
+      case 'stats':
+        this.health = msg.health;
+        this.food = msg.food;
+        this.air = msg.air;
+        break;
+      case 'hurt':
+        this.hud.flashHurt();
+        this.shake = 0.3;
+        break;
+      case 'death':
+        this.container = null;
+        this.windowScreen.hide();
+        this.state = 'dead';
+        this.controls.unlock();
+        this.onStatus?.({ kind: 'dead', message: msg.message });
+        break;
+      case 'teleport':
+        this.player.teleport(msg.x, msg.y, msg.z);
+        break;
+      case 'entitySpawn':
+        this.entities.spawn(msg.entity);
+        break;
+      case 'entityDespawn':
+        this.entities.remove(msg.id);
+        break;
+      case 'entityMove':
+        this.entities.move(msg.data);
+        break;
+      case 'chat':
+        this.hud.message(msg.from ? `<${msg.from}> ${msg.text}` : msg.text);
         break;
       case 'time':
         this.setServerTime(msg.time);
@@ -304,11 +404,20 @@ export class GameClient implements InteractionHost, InventoryHost {
 
   private processChunks(): void {
     const start = performance.now();
-    while (this.chunkQueue.length > 0 && performance.now() - start < CHUNK_BUDGET_MS) {
-      const msg = this.chunkQueue.shift()!;
-      const chunk = decodeChunk(msg.data);
-      const touched = this.world.add(chunk);
-      for (const c of touched) this.meshes.markAround(c.cx, c.cz);
+    while (this.worldQueue.length > 0) {
+      const msg = this.worldQueue[0];
+      if (msg.t === 'chunk' && performance.now() - start >= CHUNK_BUDGET_MS) break;
+      this.worldQueue.shift();
+      if (msg.t === 'blockChange') {
+        this.applyBlock(msg.x, msg.y, msg.z, msg.id);
+      } else if (msg.t === 'unloadChunk') {
+        this.world.remove(msg.cx, msg.cz);
+        this.meshes.remove(msg.cx, msg.cz);
+        this.entities.removeInChunk(msg.cx, msg.cz);
+      } else {
+        const touched = this.world.add(decodeChunk(msg.data));
+        for (const c of touched) this.meshes.markAround(c.cx, c.cz);
+      }
     }
   }
 
@@ -321,13 +430,15 @@ export class GameClient implements InteractionHost, InventoryHost {
     const body = this.player.body;
 
     this.processChunks();
-    if (this.state !== 'loading' && this.state !== 'disconnected') this.player.update(dt);
+    this.player.canSprint = this.creative || this.food > 6;
+    if (this.state !== 'loading' && this.state !== 'disconnected' && this.state !== 'dead') this.player.update(dt);
 
     // Camera: eye height eases when sneaking; FOV widens when sprinting.
     const cam = this.renderer.camera;
     this.eyeOffset += (body.eyeHeight - this.eyeOffset) * Math.min(1, dt * 14);
     cam.position.set(body.x, body.y + this.eyeOffset, body.z);
-    cam.rotation.set(this.controls.pitch, this.controls.yaw, 0);
+    this.shake = Math.max(0, this.shake - dt);
+    cam.rotation.set(this.controls.pitch, this.controls.yaw, Math.sin(this.shake * 40) * this.shake * 0.15);
     const fov = this.baseFov * (body.sprinting || (body.flying && this.controls.isDown(KEYS.sprint)) ? 1.12 : 1);
     if (Math.abs(cam.fov - fov) > 0.01) {
       cam.fov += (fov - cam.fov) * Math.min(1, dt * 10);
@@ -338,6 +449,7 @@ export class GameClient implements InteractionHost, InventoryHost {
       cam.getWorldDirection(this.dir);
       this.interaction.update(dt, cam.position, this.dir);
     }
+    this.hud.setEating(this.interaction.eating);
 
     const sky = this.sky.update(this.time, cam);
     const underwater = this.world.isWater(Math.floor(cam.position.x), Math.floor(cam.position.y), Math.floor(cam.position.z));
@@ -355,10 +467,12 @@ export class GameClient implements InteractionHost, InventoryHost {
     this.sky.group.visible = !underwater;
 
     this.meshes.update(body.x, body.z);
+    this.entities.update(dt, sky.daylight);
+    this.hud.setStats(this.health, this.food, this.air, !this.creative);
     this.hud.update(this.inventory, underwater, dt);
     this.renderer.render();
 
-    if (this.state !== 'loading' && now - this.lastMoveSent >= 1000 / TICKS_PER_SECOND) {
+    if (this.state !== 'loading' && this.state !== 'dead' && now - this.lastMoveSent >= 1000 / TICKS_PER_SECOND) {
       this.lastMoveSent = now;
       const flags = (body.onGround ? MoveFlag.ON_GROUND : 0) | (body.sneaking ? MoveFlag.SNEAK : 0) |
         (body.sprinting ? MoveFlag.SPRINT : 0) | (body.flying ? MoveFlag.FLYING : 0);
@@ -398,13 +512,13 @@ export class GameClient implements InteractionHost, InventoryHost {
     const tg = this.interaction.target;
     const state = [b.onGround && 'ground', b.inWater && 'water', b.flying && 'flying', b.sneaking && 'sneak', b.sprinting && 'sprint'].filter(Boolean).join(' ');
     this.debug.set([
-      'Cubica 0.2 (stage 2)',
+      'Cubica 0.3 (stage 3)',
       `${this.fps} fps  (cpu ${this.frameMs.toFixed(1)} ms)  draws ${info.calls}  tris ${Math.round(info.triangles / 1000)}k`,
       `XYZ ${b.x.toFixed(2)} / ${b.y.toFixed(2)} / ${b.z.toFixed(2)}  ${state}`,
       `Chunk ${bx >> 4} ${bz >> 4}  facing ${facing}`,
       `Biome ${biome}  light sky ${light >> 4} block ${light & 15}`,
       tg ? `Target ${blockDef(tg.id)?.name} @ ${tg.x} ${tg.y} ${tg.z}` : 'Target -',
-      `Mode ${this.creative ? 'creative' : 'survival'}  chunks ${this.world.chunks.size}  meshed ${this.meshes.meshedCount}`,
+      `Mode ${this.creative ? 'creative' : 'survival'}  chunks ${this.world.chunks.size}  meshed ${this.meshes.meshedCount}  items ${this.entities.count}`,
       `Seed ${this.seed}  day ${Math.floor(this.time / DAY_LENGTH_TICKS) + 1}  ${clock}`,
     ]);
   }

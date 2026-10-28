@@ -51,14 +51,19 @@ src/
     blocks/registry.ts    block definitions + lookup tables (OPAQUE, LIGHT_*, TEX_*) + TEXTURE_NAMES
     world/Chunk.ts chunkCodec.ts lighting.ts biomes.ts
     mesh/mesher.ts        greedy mesher (padded 18×18×H volume)
-    items/                registry (Hebrew names, CREATIVE_ITEMS, blockDrop), Inventory (shared click logic), mining
+    blocks/placement.ts   placement orientation (facing/torch walls/doors) + isSupported (what pops off)
+    items/                registry (items ≥4096, tools, food, fuel), Inventory, Window (container click
+                          logic incl. crafting output), crafting (recipes + smelting), mining (breakTime,
+                          canHarvest, blockDrops)
     physics/              PlayerBody (fixed-step movement), collision (AABB sweep), raycast (DDA)
     protocol/messages.ts  ClientMsg / ServerMsg
-  server/ GameServer.ts ServerWorld.ts WorkerChunkGenerator.ts worldgen/WorldGenerator.ts
+  server/ GameServer.ts ServerWorld.ts WorkerChunkGenerator.ts PlayerSession.ts ItemEntities.ts
+          worldgen/WorldGenerator.ts worldgen/trees.ts (shared by worldgen and sapling growth)
           storage/WorldStorage.ts   IndexedDB worlds + .cubica export/import
   client/ GameClient.ts ClientWorld.ts render/ textures/ input/ ui/ player/LocalPlayer.ts
           interaction/BlockInteraction.ts   targeting, mining progress + cracks, placing, pick block
-          ui/Hud.ts InventoryScreen.ts icons.ts
+          ui/Hud.ts (hotbar, hearts/food/air, messages) WindowScreen.ts (all container UIs) icons.ts
+          render/EntityRenderer.ts (dropped items as sprites)  textures/itemTextures.ts (item sprites)
   net/    Transport.ts LocalTransport.ts
   workers/ WorkerPool.ts worldgen.worker.ts mesher.worker.ts types.ts
 tests/    vitest (noise, worldgen, codec, lighting, mesher, inventory, physics, raycast, world file,
@@ -69,8 +74,11 @@ tests/    vitest (noise, worldgen, codec, lighting, mesher, inventory, physics, 
 - 16×16×256. Index `x | z<<4 | y<<8` (horizontal layers are contiguous).
 - `blocks: Uint16Array`: 12-bit id + 4-bit state. `light: Uint8Array`: high nibble sky, low nibble block.
 - `heightmap` (highest non-air block per column), `biomes` (per column), `maxY`.
-- `chunkCodec`: version + cx/cz + topY + RLE(varint) of blocks and light up to `maxY+16`. Used for both
-  network and saves. A typical chunk is a few KB.
+- `blockEntities: Map<index, BlockEntity>`: chests and furnaces (contents, burn/cook state).
+- Block state (upper 4 bits) is used by: furnace/chest facing, doors (facing | open | upper half), torches
+  (standing or which wall). Messages carry raw values (id + state).
+- `chunkCodec` v2: version + cx/cz + topY + RLE(varint) of blocks and light up to `maxY+16` + block
+  entities as JSON. Reads v1 too. Used for both network and saves. A typical chunk is a few KB.
 
 ### Lighting
 - Sky light (15 travels straight down without loss through clear blocks) + block light (emitters), via BFS.
@@ -113,7 +121,42 @@ prediction.
 Host validation already in place: reach (5 + 1.5 slack, from the eye), minimum dig time in survival (70% of
 `breakTime`), the held stack must contain a placeable block, the target must be replaceable, a placed block
 must touch something, it can't overlap a player, plants need solid ground, creative-only inventory actions.
-Still to come in stage 4: movement speed limit, chat rate-limit.
+Still to come in stage 4: movement speed limit (fall damage currently trusts the client's positions),
+chat rate-limit.
+
+### Survival (stage 3)
+- Stats live on the host (`PlayerSession`): health 20, food 20 + saturation + exhaustion (walking/sprinting/
+  jumping/mining/regeneration), air 300 ticks. Fall damage = fall height − 3 (computed by the host from
+  move messages with the ON_GROUND flag). Drowning: 2 damage per second without air. Starving stops at 1 hp.
+  Regeneration when food ≥ 18. Creative ignores all of it.
+- Death: the whole inventory spills as item entities, `death` message → death screen → `respawn` →
+  bedroll (if it still exists) or world spawn.
+- Item entities (`ItemEntities`): host physics, pickup within 1.5 blocks, merging, despawn after 5 min.
+  All drops (mining, death, Q, closing a window with leftovers) go through them. Not saved yet: items
+  lying on the ground vanish when their chunk unloads or the world closes.
+- Windows: window 0 = own inventory with a 2×2 grid; containers get an incrementing id. The client
+  predicts with the same `ContainerWindow` code; the host answers with `inventory` + `window` snapshots.
+  Chests/furnaces share one slot array between all viewers. Closing returns grid/cursor items.
+- Furnace: 200 ticks per item, fuel in ticks (coal 1600, wood 300, stick 100). Lit furnaces switch to
+  FURNACE_LIT (light 13). Active furnaces are tracked in `GameServer.furnaces`.
+- Tools: 5 tiers (wood/stone/iron/gold/diamond) × pickaxe/axe/shovel/sword. Original two-step crafting:
+  material in a head shape → head; head + 2 sticks (shapeless) → tool. Head shapes: pickaxe `MMM`,
+  axe L of 3, shovel `MM`, sword blade vertical `M/M`. Pickaxe tier gates drops (stone/coal ≥ wood,
+  iron ≥ stone, gold/diamond ≥ iron). Durability −1 per block (sword −2).
+- Other recipes: log → 4 planks, plank → 2 sticks, 2×2 planks → workbench, ring of rubblestone →
+  furnace, ring of planks → chest, coal over stick → 4 torches, 3 leaves over 3 planks → bedroll,
+  2×3 planks → 3 doors, 2×2 stone → 4 cut stone. Smelting: raw iron/gold → ingots, sand → glass,
+  rubblestone → stone, ashfruit → baked, logs → coal.
+- Food: ashfruit (6% from ashwood leaves), frostberries (5% from frostpine needles), baked ashfruit.
+  Eating = hold right-click 1.6 s (host checks ≥70% of that).
+- Bedroll: right-click sets the respawn point; at night, when every living player has used one within
+  3 s, the night is skipped.
+- Random ticks (3 per 16-high section per tick): saplings grow into trees (shared `trees.ts`), grass
+  spreads to lit dirt, grass under an opaque block turns to dirt.
+- Support rules (`isSupported`): plants/saplings/cactus/torches/doors pop off with a drop when what holds
+  them is removed (host cascades; client predicts the same).
+- Client applies `chunk`, `blockChange` and `unloadChunk` through one ordered queue (a change for a chunk
+  still waiting to be decoded used to get lost).
 
 ### Gameplay (stage 2)
 - Physics `PlayerBody` (blocks/seconds, fixed 60 Hz step): walk 4.3, sprint 5.6, sneak 1.3 (no walking off
@@ -121,8 +164,6 @@ Still to come in stage 4: movement speed limit, chat rate-limit.
   as solid so nobody falls through the world while it streams in.
 - Mining: `breakTime = hardness × 1.5`, ×10/3 without a pickaxe on blocks that want one, ÷ tool speed with
   the right tool (tools arrive in stage 3). Creative breaks instantly (0.2 s repeat).
-- Drops (stage-2 simplification, replaced by drop tables in stage 3): grass → dirt, stone → rubblestone,
-  leaves/glass/ice/tall grass → nothing. Items go straight into the inventory.
 - Game mode is per player (saved with the player). The world's mode is the default for new players.
 - Saving: only changed chunks are stored; untouched ones regenerate from the seed. Autosave every 30 s,
   on tab hide and on "save and quit". Chunks unloaded before their save finishes stay in memory (`evicted`).
@@ -141,8 +182,9 @@ before the user has approved the current one.**
    by hardness/tool, block placement, 9-slot hotbar, inventory (E), Creative, IndexedDB save + `.cubica`
    export/import, main menu (new / load / join), pause menu. "Join" is a placeholder until stage 4.
    Building blocks added: planks ×2, rubblestone, glass, cut stone.
-3. ⏳ **Survival**: health, hunger, fall damage, drowning, death/respawn, 2×2/3×3 crafting with our own
-   recipes, 5 tool tiers with durability, furnace, chests, bed, torches, doors, food, drop tables.
+3. ✅ **Survival**: health, hunger, fall damage, drowning, death/respawn, 2×2/3×3 crafting with our own
+   recipes, 5 tool tiers with durability, furnace, chests, bedroll, torches, doors, food, drop tables,
+   dropped items, saplings that grow.
 4. ⏳ **P2P multiplayer**: "Open to friends" → code/link `?join=CODE`, PeerJS + public STUN, chunk sync,
    players, blocks, entities, chat (T), player list (Tab), host validation, disconnect handling, up to 8
    players, clear error messages when a connection fails (including symmetric NAT without TURN).

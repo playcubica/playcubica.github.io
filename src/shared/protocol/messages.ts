@@ -2,7 +2,9 @@
 // even in single player (over an in-memory transport), so multiplayer adds only a
 // network transport. Messages marked (stage N) are reserved and not handled yet.
 
-import type { InventoryState } from '../items/Inventory';
+import type { InventoryState, Slot } from '../items/Inventory';
+import type { ItemStack } from '../items/registry';
+import type { WindowKind } from '../items/Window';
 
 export type Vec3 = [number, number, number];
 
@@ -19,18 +21,26 @@ export type ClientMsg =
   | { t: 'move'; seq: number; x: number; y: number; z: number; yaw: number; pitch: number; flags: number }
   /** phase 0 = start, 1 = abort, 2 = finish */
   | { t: 'dig'; phase: 0 | 1 | 2; x: number; y: number; z: number; face: number }
-  /** (x, y, z) is the cell the new block goes into; it comes from the selected hotbar slot. */
-  | { t: 'place'; x: number; y: number; z: number; face: number; slot: number }
+  /**
+   * (x, y, z) is the cell the new block goes into, `raw` the block value incl. state
+   * (orientation); the item comes from hotbar `slot`.
+   */
+  | { t: 'place'; x: number; y: number; z: number; raw: number; slot: number }
   | { t: 'held'; slot: number }
-  | { t: 'useBlock'; x: number; y: number; z: number; face: number } // (stage 3)
-  | { t: 'useItem'; slot: number } // (stage 3)
+  /** Right-click on an interactive block (workbench, furnace, chest, door, bedroll). */
+  | { t: 'useBlock'; x: number; y: number; z: number }
+  /** Eating: phase 0 = start, 1 = abort, 2 = finish. */
+  | { t: 'useItem'; phase: 0 | 1 | 2; slot: number }
+  /** Q: drop one (or the whole stack) of the held item. */
+  | { t: 'drop'; all: boolean }
   | { t: 'attack'; entityId: number } // (stage 5)
-  /** See InvAction in shared/items/Inventory.ts. */
-  | { t: 'inv'; action: number; slot: number; button: number; item?: number }
+  /** Click in a window (see Window.ts); window 0 is the player's inventory. */
+  | { t: 'inv'; window: number; action: number; slot: number; button: number; item?: number }
+  | { t: 'closeWindow'; window: number }
   /** Host only. */
   | { t: 'setGameMode'; mode: number }
   | { t: 'chat'; text: string } // (stage 4)
-  | { t: 'respawn' }; // (stage 3)
+  | { t: 'respawn' };
 
 export interface PlayerInfo {
   id: number;
@@ -65,18 +75,35 @@ export type ServerMsg =
     }
   | { t: 'chunk'; cx: number; cz: number; data: Uint8Array }
   | { t: 'unloadChunk'; cx: number; cz: number }
+  /** `id` is the raw block value (id + state). */
   | { t: 'blockChange'; x: number; y: number; z: number; id: number }
-  | { t: 'blockBatch'; changes: number[] } // (stage 3) flat [x, y, z, id, ...]
   | { t: 'digProgress'; playerId: number; x: number; y: number; z: number; stage: number } // (stage 4)
+  | { t: 'entitySpawn'; entity: EntityInfo }
+  | { t: 'entityDespawn'; id: number; pickedBy?: number }
+  /** Positions of moving entities, flat [id, x, y, z, …]. */
+  | { t: 'entityMove'; data: number[] }
   | { t: 'snapshot'; entities: EntityState[] } // (stage 4)
-  | { t: 'entitySpawn'; id: number; kind: string; data: unknown } // (stage 5)
-  | { t: 'entityDespawn'; id: number } // (stage 5)
-  | { t: 'correction'; x: number; y: number; z: number } // (stage 4)
+  | { t: 'teleport'; x: number; y: number; z: number }
   | { t: 'inventory'; state: InventoryState }
+  /** Contents of an open window's container slots (window 0 = own crafting grid). */
+  | { t: 'window'; id: number; kind: WindowKind; slots: Slot[]; progress?: [number, number] }
+  | { t: 'closeWindow'; id: number }
   | { t: 'gameMode'; mode: number }
-  | { t: 'stats'; health: number; food: number; air: number } // (stage 3)
+  | { t: 'stats'; health: number; food: number; air: number }
+  | { t: 'hurt'; amount: number }
+  | { t: 'death'; message: string }
   | { t: 'time'; time: number }
-  | { t: 'chat'; from: string; text: string } // (stage 4)
+  /** System messages use from = ''. Player chat arrives in stage 4. */
+  | { t: 'chat'; from: string; text: string }
   | { t: 'playerJoin'; player: PlayerInfo } // (stage 4)
   | { t: 'playerLeave'; id: number } // (stage 4)
   | { t: 'kick'; reason: string };
+
+export interface EntityInfo {
+  id: number;
+  kind: 'item';
+  x: number;
+  y: number;
+  z: number;
+  item: ItemStack;
+}

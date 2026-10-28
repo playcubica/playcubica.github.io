@@ -18,6 +18,13 @@ export interface PlayerSave {
   flying: boolean;
   gameMode: number;
   inventory: InventoryState;
+  // Added in stage 3 (optional so older saves still load).
+  health?: number;
+  food?: number;
+  saturation?: number;
+  air?: number;
+  /** Bedroll respawn point. */
+  spawnPoint?: Vec3;
 }
 
 export interface WorldMeta {

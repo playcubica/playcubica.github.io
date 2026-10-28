@@ -22,7 +22,7 @@ const vertexShader = /* glsl */ `
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
     // Texture rows run top-down, world v runs bottom-up.
-    vUv = vec3(aTex.x, -aTex.y, aTex.z);
+    vUv = vec3(aTex.x / 16.0, -aTex.y / 16.0, aTex.z);
     vShade = aTex.w / 255.0;
     vLight = aLight.xyz;
     vDist = length(mv.xyz);
