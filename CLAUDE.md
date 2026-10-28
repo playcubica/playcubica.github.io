@@ -327,8 +327,17 @@ before the user has approved the current one.**
   when localStorage `cubica.signedIn` says this browser was signed in. `null` config hides it all.
 - `src/cloud/account.ts` (`Account`: popup sign-in, sign-out, `idToken()`), `cloudWorlds.ts`
   (`FirestoreWorlds` + `SyncedStore`), `verifyToken.ts` (RS256 JWT check with WebCrypto against Google's JWKs).
-- Cloud saves (Firestore, rules in `firestore.rules`, pasted in the Firebase console):
-  `users/{uid}/worlds/{id}` = `{ meta: JSON string, updatedAt }`, chunks in `.../chunks/{cx}_{cz}` = `{ d: Bytes }`.
+- Cloud saves = **shared worlds** (Firestore, rules in `firestore.rules`, pasted in the Firebase console):
+  `worlds/{id}` = `{ meta: JSON string, updatedAt, owner, members: [uid], names: {uid: name},
+  host: {uid, name, until} | null }`, chunks in `worlds/{id}/chunks/{cx}_{cz}` = `{ d: Bytes }`. Every friend
+  who joins while signed in is added as a member (`ServerOptions.onAccountJoin` → `SyncedStore.addMember`,
+  pushed at once), so the world appears in their "load world" list and any member can host it later (same
+  fixed invite code). Rules: members read/update, only the owner (`WorldMeta.owner`, never changes) deletes;
+  chunk writes are checked with `getAfter` because the world entry rides along in every batch. The host lock
+  (`host`, renewed with each push, `HOST_LOCK_MS` = 3 min, cleared by the final flush on exit) makes the list
+  show "🟢 X plays now" with a join button instead of a second copy being hosted. Shared worlds open to
+  friends automatically. Non-owners "remove" (leave) instead of delete. Old personal saves under
+  `users/{uid}/worlds` are still listed and move to `worlds/` on their next save.
   IndexedDB stays the working copy. `SyncedStore` wraps the local ChunkStore: first push of a session uploads
   every saved chunk, then only changed ones, at most once a minute (on `saveMeta`), on tab hide and on exit.
   The load menu merges local and cloud lists; a newer (or cloud-only) copy is downloaded into IndexedDB

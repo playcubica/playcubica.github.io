@@ -21,6 +21,8 @@ export interface SessionOptions {
   token?: string | null;
   /** Host only: mirror the world to this cloud (signed-in players). */
   cloud?: CloudBackend | null;
+  /** Host only: the local copy was just downloaded from the cloud (no need to upload it all again). */
+  cloudUpToDate?: boolean;
 }
 
 /**
@@ -46,13 +48,18 @@ export class GameSession {
   static host(container: HTMLElement, meta: WorldMeta, storage: WorldStorage | null, opts: SessionOptions, onStatus: (s: ClientStatus) => void): GameSession {
     const generator = new WorkerChunkGenerator(meta.seed);
     const local = storage?.forWorld(meta.id);
-    const synced = local && storage && opts.cloud ? new SyncedStore(local, opts.cloud, () => storage.allChunks(meta.id)) : null;
+    const cloud = opts.cloud;
+    if (cloud) meta.owner ??= cloud.uid;
+    const synced = local && storage && cloud
+      ? new SyncedStore(local, cloud, () => storage.allChunks(meta.id), { uid: cloud.uid, name: opts.playerName }, { upToDate: opts.cloudUpToDate })
+      : null;
     const projectId = firebaseConfig?.projectId;
     const server = new GameServer({
       viewDistance: opts.viewDistance,
       meta,
       store: synced ?? local,
       verifyAccount: projectId ? (token) => verifyIdToken(token, projectId) : undefined,
+      onAccountJoin: synced ? (uid, name) => synced.addMember(uid, name) : undefined,
     }, generator);
     const [serverEnd, clientEnd] = createLocalPair<ServerMsg, ClientMsg>();
     server.addConnection(serverEnd, { host: true, account: opts.account });
@@ -62,6 +69,8 @@ export class GameSession {
     client.start();
     const session = new GameSession(server, generator, client);
     session.synced = synced;
+    // Claim the world right away, so others see it's being played.
+    if (synced) void server.save();
     return session;
   }
 
@@ -109,6 +118,11 @@ export class GameSession {
     }
   }
 
+  /** The world is mirrored to the cloud, so signed-in friends can carry on with it. */
+  get shared(): boolean {
+    return this.synced !== null;
+  }
+
   /** Hebrew note when the last cloud save failed (signed-in host only). */
   get cloudProblem(): string | null {
     return this.synced?.problem ?? null;
@@ -127,7 +141,7 @@ export class GameSession {
     this.network?.close();
     this.client.dispose();
     await this.server?.stop();
-    await this.synced?.flush();
+    await this.synced?.flush(true);
     this.generator?.terminate();
     this.onLeave?.();
   }

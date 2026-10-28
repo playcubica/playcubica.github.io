@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SyncedStore, type ChunkBlob, type CloudBackend, type CloudWorldInfo } from '../src/cloud/cloudWorlds';
+import { HOST_LOCK_MS, SyncedStore, type ChunkBlob, type CloudBackend, type CloudHost, type CloudWorldInfo, type WorldExtras } from '../src/cloud/cloudWorlds';
 import { verifyIdToken, type JwkSet } from '../src/cloud/verifyToken';
 import { createLocalPair } from '../src/net/LocalTransport';
 import { GameServer } from '../src/server/GameServer';
@@ -69,23 +69,40 @@ describe('Firebase ID token verification', () => {
 
 // --- Cloud mirror ---------------------------------------------------------------
 
+interface MemWorld {
+  meta: WorldMeta;
+  chunks: Map<string, Uint8Array>;
+  owner: string;
+  members: Record<string, string>;
+  host: CloudHost | null;
+}
+
 class MemCloud implements CloudBackend {
-  worlds = new Map<string, { meta: WorldMeta; chunks: Map<string, Uint8Array> }>();
+  worlds = new Map<string, MemWorld>();
   puts: number[] = [];
   failNext = false;
+  constructor(readonly uid = 'me') {}
   async listWorlds(): Promise<CloudWorldInfo[]> {
-    return [...this.worlds.values()].map((w) => ({ meta: w.meta, updatedAt: w.meta.lastPlayed }));
+    return [...this.worlds.values()]
+      .filter((w) => this.uid in w.members)
+      .map((w) => ({ meta: w.meta, updatedAt: w.meta.lastPlayed, owner: w.owner, members: { ...w.members }, host: w.host }));
   }
-  async putWorld(meta: WorldMeta, chunks: ChunkBlob[]): Promise<void> {
+  async putWorld(meta: WorldMeta, chunks: ChunkBlob[], extras: WorldExtras = {}): Promise<void> {
     if (this.failNext) {
       this.failNext = false;
       throw new Error('offline');
     }
-    const w = this.worlds.get(meta.id) ?? { meta, chunks: new Map() };
+    const w: MemWorld = this.worlds.get(meta.id) ?? { meta, chunks: new Map(), owner: meta.owner ?? this.uid, members: {}, host: null };
     w.meta = meta;
+    w.members[this.uid] = 'me';
+    for (const m of extras.members ?? []) w.members[m.uid] = m.name;
+    if (extras.host !== undefined) w.host = extras.host;
     for (const c of chunks) w.chunks.set(`${c.cx},${c.cz}`, c.data);
     this.worlds.set(meta.id, w);
     this.puts.push(chunks.length);
+  }
+  async leaveWorld(id: string): Promise<void> {
+    delete this.worlds.get(id)?.members[this.uid];
   }
   async getWorld(id: string) {
     const w = this.worlds.get(id);
@@ -119,7 +136,7 @@ describe('cloud mirror (SyncedStore)', () => {
     local.chunks.set('5,5', new Uint8Array([5])); // played offline before
     const cloud = new MemCloud();
     let now = 0;
-    const store = new SyncedStore(local, cloud, async () => local.all(), () => now);
+    const store = new SyncedStore(local, cloud, async () => local.all(), { uid: 'me', name: 'Me' }, { now: () => now });
     const meta = newWorldMeta('w', 1, GameMode.SURVIVAL);
 
     await store.saveChunks([{ cx: 0, cz: 0, data: new Uint8Array([1]) }]);
@@ -148,6 +165,37 @@ describe('cloud mirror (SyncedStore)', () => {
     await store.flush();
     expect(cloud.worlds.get(meta.id)!.chunks.has('2,0')).toBe(true);
   });
+
+  it('shares the world with friends who join and holds a hosting lock while open', async () => {
+    const local = new MemStore();
+    const cloud = new MemCloud('me');
+    let now = 1000;
+    const store = new SyncedStore(local, cloud, async () => local.all(), { uid: 'me', name: 'Me' }, { upToDate: true, now: () => now });
+    const meta = newWorldMeta('shared', 1, GameMode.SURVIVAL);
+    meta.owner = 'me';
+    await store.saveMeta(meta);
+    await store.flush();
+    const w = cloud.worlds.get(meta.id)!;
+    expect(cloud.puts[0]).toBe(0); // just downloaded: nothing to re-upload
+    expect(w.host).toMatchObject({ uid: 'me', until: 1000 + HOST_LOCK_MS });
+    store.addMember('friend-1', 'Noa');
+    await store.flush();
+    expect(w.members).toMatchObject({ me: 'me', 'friend-1': 'Noa' });
+    // The friend now sees it in their list and can host it later; the owner stays the creator.
+    const friendView = new MemCloud('friend-1');
+    friendView.worlds = cloud.worlds;
+    const listed = await friendView.listWorlds();
+    expect(listed.map((x) => x.meta.id)).toEqual([meta.id]);
+    expect(listed[0].owner).toBe('me');
+    // Leaving the game gives up the lock.
+    now = 5000;
+    await store.flush(true);
+    expect(w.host).toBeNull();
+    // A friend removing it from their list doesn't delete it.
+    await friendView.leaveWorld(meta.id);
+    expect(await friendView.listWorlds()).toEqual([]);
+    expect(cloud.worlds.has(meta.id)).toBe(true);
+  });
 });
 
 // --- Verified accounts on the host ----------------------------------------------
@@ -165,10 +213,12 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 describe('accounts on the host', () => {
   it('keys signed-in players by account, rejects a second login, and falls back to guest', async () => {
     const meta = newWorldMeta('acc', 1, GameMode.SURVIVAL);
+    const shared: string[] = [];
     const server = new GameServer({
       viewDistance: 2,
       meta,
       verifyAccount: async (t) => (t.startsWith('good:') ? { uid: t.slice(5) } : null),
+      onAccountJoin: (uid, name) => shared.push(`${uid}:${name}`),
     }, flatGen);
     // Progress made earlier as a guest named Noa.
     meta.players.Noa = { pos: [3, 10, 3], yaw: 0, pitch: 0, flying: false, gameMode: GameMode.CREATIVE, inventory: { slots: [], held: 0 } as never };
@@ -189,6 +239,7 @@ describe('accounts on the host', () => {
     expect(welcome && welcome.t === 'welcome' && welcome.gameMode).toBe(GameMode.CREATIVE); // took over the guest save
     expect(meta.players['g:uid-noa']).toBeDefined();
     expect(meta.players.Noa).toBeUndefined();
+    expect(shared).toEqual(['uid-noa:Noa']); // the world gets shared with her
 
     const again = await join('Noa2', 'good:uid-noa');
     expect(again.got.some((m) => m.t === 'kick' && m.reason.includes('כבר מחובר'))).toBe(true);

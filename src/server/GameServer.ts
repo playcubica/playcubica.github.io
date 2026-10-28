@@ -38,6 +38,8 @@ export interface ServerOptions {
   store?: ChunkStore;
   /** Checks a joining player's account token (Google sign-in); omit to treat everyone as a guest. */
   verifyAccount?: (token: string) => Promise<{ uid: string } | null>;
+  /** A player with a verified account joined (the world gets shared with them). */
+  onAccountJoin?: (uid: string, name: string) => void;
 }
 
 /** Chunks sent to one player per tick (keeps the channel and the client responsive). */
@@ -452,6 +454,7 @@ export class GameServer {
     p.lastMoveAt = performance.now();
     p.joined = true;
     this.players.set(p.id, p);
+    if (p.account && !p.isHost) this.options.onAccountJoin?.(p.account, p.name);
     for (const q of this.players.values()) if (q !== p && q.joined) q.send({ t: 'playerJoin', player: { id: p.id, name: p.name } });
     p.send({
       t: 'welcome',

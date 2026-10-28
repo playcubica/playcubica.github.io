@@ -220,6 +220,27 @@ describe('flowing water', () => {
     expect(raw(1, 10, -20)).toBe(B.WATER); // stays: it is a source now
   });
 
+  it('carries a swimmer along with the current (world queried as an object with methods)', () => {
+    // Like ClientWorld: getRaw uses `this`, so the physics must call it as a method.
+    class World {
+      private cells = new Map<string, number>([['0,10,0', withState(B.WATER, 1)], ['1,10,0', withState(B.WATER, 2)], ['-1,10,0', B.WATER]]);
+      getRaw(x: number, y: number, z: number): number {
+        return this.cells.get(`${x},${y},${z}`) ?? (y < 10 ? B.STONE : B.AIR);
+      }
+      boxes(x: number, y: number, z: number) {
+        return collisionBoxes(this.getRaw(x, y, z));
+      }
+      isWater(x: number, y: number, z: number) {
+        return (this.getRaw(x, y, z) & 0xfff) === B.WATER;
+      }
+    }
+    const body = new PlayerBody();
+    body.x = 0.5; body.y = 10; body.z = 0.5;
+    const input = { forward: 0, strafe: 0, jump: false, sneak: false, sprint: false, yaw: 0 };
+    for (let i = 0; i < 20; i++) body.step(new World(), input, 1 / 60);
+    expect(body.vx).toBeGreaterThan(0.3); // pushed towards +x (lower water)
+  });
+
   it('pushes towards lower water and draws flowing water lower', () => {
     const cells = new Map<string, number>([['0,0,0', withState(B.WATER, 2)], ['1,0,0', withState(B.WATER, 3)], ['-1,0,0', withState(B.WATER, 1)]]);
     const get = (x: number, y: number, z: number) => cells.get(`${x},${y},${z}`) ?? (y < 0 ? B.STONE : B.STONE);

@@ -39,6 +39,8 @@ export interface WorldMeta {
   players: Record<string, PlayerSave>;
   /** The world's own invite code, kept so friends can reuse the same code/link every time. */
   inviteCode?: string;
+  /** Firebase uid of whoever first saved the world to the cloud (only they can delete it there). */
+  owner?: string;
 }
 
 /** Minimal persistence interface the server needs (lets tests run without IndexedDB). */

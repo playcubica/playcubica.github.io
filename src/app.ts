@@ -98,7 +98,7 @@ export class App {
   private settings: Settings = loadSettings();
   private playerName = loadName();
   private readonly account = new Account();
-  private cloudBackend: { uid: string; backend: Promise<CloudBackend> } | null = null;
+  private cloudBackend: { key: string; backend: Promise<CloudBackend> } | null = null;
   private onMainMenu = false;
   /** Index of the menu item the controller points at (-1 = none yet). */
   private padIndex = -1;
@@ -153,7 +153,8 @@ export class App {
   private cloud(): Promise<CloudBackend> | null {
     const user = this.account.user;
     if (!user) return null;
-    if (this.cloudBackend?.uid !== user.uid) this.cloudBackend = { uid: user.uid, backend: FirestoreWorlds.open(user.uid) };
+    const key = `${user.uid}|${this.playerName}`;
+    if (this.cloudBackend?.key !== key) this.cloudBackend = { key, backend: FirestoreWorlds.open(user.uid, this.playerName) };
     return this.cloudBackend.backend;
   }
 
@@ -341,23 +342,35 @@ export class App {
     for (const c of cloudList) if (!local.some((w) => w.id === c.meta.id)) rows.push({ meta: c.meta, local: false, cloud: c });
     rows.sort((a, b) => Math.max(b.meta.lastPlayed, b.cloud?.updatedAt ?? 0) - Math.max(a.meta.lastPlayed, a.cloud?.updatedAt ?? 0));
     const signedIn = !!cloud;
+    const me = this.account.user?.uid ?? '';
+    const now = Date.now();
+    /** Someone else is hosting this world right now. */
+    const hostedBy = (r: (typeof rows)[number]) => (r.cloud?.host && r.cloud.host.until > now && r.cloud.host.uid !== me ? r.cloud.host : null);
+    const isOwner = (r: (typeof rows)[number]) => !r.cloud || r.cloud.owner === me;
     const where = (r: (typeof rows)[number]): string => {
       if (!signedIn) return '';
-      if (!r.local) return ' · <span class="cloud-tag">☁ בענן</span>';
       if (!r.cloud) return ' · רק במחשב הזה';
-      return r.cloud.updatedAt > r.meta.lastPlayed + 1000 ? ' · <span class="cloud-tag">☁ בענן יש גרסה חדשה יותר</span>' : ' · <span class="cloud-tag">☁ שמור בענן</span>';
+      const others = Object.entries(r.cloud.members).filter(([uid]) => uid !== me).map(([, name]) => name || 'חבר');
+      const shared = others.length > 0 ? ` · <span class="cloud-tag">👥 משותף עם ${esc(others.slice(0, 3).join(', '))}${others.length > 3 ? ` ועוד ${others.length - 3}` : ''}</span>` : '';
+      const fresh = !r.local ? ' · <span class="cloud-tag">☁ בענן</span>'
+        : r.cloud.updatedAt > r.meta.lastPlayed + 1000 ? ' · <span class="cloud-tag">☁ בענן יש גרסה חדשה יותר</span>' : ' · <span class="cloud-tag">☁ שמור בענן</span>';
+      return fresh + shared;
     };
-    const html = rows.map((r, i) => `
+    const html = rows.map((r, i) => {
+      const host = hostedBy(r);
+      return `
       <div class="world-row" data-i="${i}">
         <div class="world-info">
           <div class="world-name">${esc(r.meta.name)}</div>
           <div class="small">${r.meta.gameMode === GameMode.CREATIVE ? 'יצירתי' : 'הישרדות'} · ${new Date(Math.max(r.meta.lastPlayed, r.cloud?.updatedAt ?? 0)).toLocaleString('he-IL')}${where(r)}</div>
+          ${host ? `<div class="small online-tag">🟢 ${esc(host.name || 'חבר')} משחק/ת בעולם עכשיו</div>` : ''}
         </div>
-        <button class="btn small-btn primary" data-a="play">שחק</button>
+        ${host && r.meta.inviteCode ? '<button class="btn small-btn primary" data-a="join">הצטרף</button>' : '<button class="btn small-btn primary" data-a="play">שחק</button>'}
         ${signedIn && r.local && !r.cloud ? '<button class="btn small-btn" data-a="upload">גבה לענן</button>' : ''}
         ${r.local ? '<button class="btn small-btn" data-a="export">ייצוא</button>' : ''}
-        <button class="btn small-btn danger" data-a="delete">מחק</button>
-      </div>`).join('');
+        <button class="btn small-btn danger" data-a="delete">${isOwner(r) ? 'מחק' : 'הסר'}</button>
+      </div>`;
+    }).join('');
     const s = this.show(`
       <div class="panel wide">
         <h2>טען עולם</h2>
@@ -376,16 +389,23 @@ export class App {
     s.querySelectorAll<HTMLElement>('.world-row').forEach((row) => {
       const r = rows[Number(row.dataset.i)];
       const meta = r.meta;
+      const shareWithOthers = !!r.cloud && Object.keys(r.cloud.members).some((uid) => uid !== me);
+      const join = row.querySelector<HTMLButtonElement>('[data-a=join]');
+      if (join && meta.inviteCode) {
+        const code = meta.inviteCode;
+        join.onclick = () => this.joinMenu(code, true);
+        return;
+      }
       el(row, '[data-a=play]').onclick = async () => {
         const newer = r.cloud && (!r.local || r.cloud.updatedAt > meta.lastPlayed + 1000);
-        if (!newer || !cloud) return this.play(meta);
+        if (!newer || !cloud) return this.play(meta, { autoOpen: shareWithOthers });
         if (!this.storage) return fail('הדפדפן לא מאפשר שמירה מקומית, אז אי אפשר להוריד את העולם מהענן.');
         this.show('<div class="panel"><h2>מוריד את העולם מהענן…</h2></div>', { menu: true });
         try {
           const got = await (await cloud).getWorld(meta.id);
           if (!got) throw new Error('העולם לא נמצא בענן');
           await this.storage.replaceWorld(got.meta, got.chunks);
-          void this.play(got.meta);
+          void this.play(got.meta, { upToDate: true, autoOpen: shareWithOthers });
         } catch (err) {
           console.error(err);
           await this.loadMenu();
@@ -428,11 +448,16 @@ export class App {
         };
       }
       el(row, '[data-a=delete]').onclick = async () => {
-        const places = r.local && r.cloud ? ' מהמחשב ומהענן' : r.cloud ? ' מהענן' : '';
-        if (!confirm(`למחוק את "${meta.name}"${places}? אי אפשר לבטל.`)) return;
+        const owner = isOwner(r);
+        const question = !owner
+          ? `להסיר את "${meta.name}" מהרשימה שלך? העולם יישאר אצל החברים, ותוכל/י לחזור אליו אם יזמינו אותך שוב.`
+          : shareWithOthers
+            ? `למחוק את "${meta.name}" לגמרי? העולם יימחק גם לכל החברים שמשתפים אותו. אי אפשר לבטל.`
+            : `למחוק את "${meta.name}"${r.local && r.cloud ? ' מהמחשב ומהענן' : r.cloud ? ' מהענן' : ''}? אי אפשר לבטל.`;
+        if (!confirm(question)) return;
         try {
           if (r.local) await this.storage!.deleteWorld(meta.id);
-          if (r.cloud && cloud) await (await cloud).deleteWorld(meta.id);
+          if (r.cloud && cloud) await (owner ? (await cloud).deleteWorld(meta.id) : (await cloud).leaveWorld(meta.id));
           void this.loadMenu();
         } catch (err) {
           fail(`המחיקה נכשלה: ${err instanceof Error ? err.message : String(err)}`);
@@ -451,7 +476,7 @@ export class App {
     };
   }
 
-  private joinMenu(prefill = ''): void {
+  private joinMenu(prefill = '', auto = false): void {
     const s = this.show(`
       <div class="panel">
         <h2>הצטרף לחבר</h2>
@@ -460,6 +485,7 @@ export class App {
         <p class="error" data-f="error" style="display:none"></p>
         <button class="btn primary" data-a="join">הצטרף</button>
         <button class="btn" data-a="back">חזרה</button>
+        ${this.account.configured && !this.account.user ? '<p class="small">💡 מחוברים עם Google? העולם יופיע גם אצלכם ב"טען עולם", ותוכלו להמשיך אותו גם כשהמארח לא מחובר.</p>' : ''}
         <p class="small">החיבור ישיר בין המחשבים (WebRTC). שרת תיווך ציבורי וחינמי רק מכיר ביניהם.</p>
       </div>`, { menu: true });
     const error = el(s, '[data-f=error]');
@@ -494,11 +520,16 @@ export class App {
         fail(err instanceof Error ? err.message : String(err));
       }
     };
+    if (auto) button.click();
   }
 
   // --- In game ------------------------------------------------------------------
 
-  private async play(meta: WorldMeta): Promise<void> {
+  /**
+   * Hosts a world. `upToDate`: the local copy was just downloaded. `autoOpen`: the world is shared,
+   * so it opens to friends right away under its fixed code.
+   */
+  private async play(meta: WorldMeta, opts: { upToDate?: boolean; autoOpen?: boolean } = {}): Promise<void> {
     this.show('<div class="panel"><h2>טוען עולם…</h2></div>', { menu: true });
     let cloud: CloudBackend | null = null;
     try {
@@ -513,7 +544,14 @@ export class App {
         settings: this.settings,
         account: this.account.user?.uid ?? null,
         cloud: this.storage ? cloud : null,
+        cloudUpToDate: opts.upToDate,
       }, (st) => this.status(st));
+      const session = this.session;
+      if (opts.autoOpen) {
+        session.openToFriends().catch((err) => console.warn('could not open to friends', err)).finally(() => {
+          if (this.session === session && this.screen.style.display !== 'none' && this.screen.querySelector('[data-a=resume]')) this.pauseMenu(session);
+        });
+      }
     } catch (err) {
       console.error(err);
       const s = this.show(`
@@ -594,6 +632,8 @@ export class App {
       <div class="panel">
         <h2>${esc(server ? server.meta.name : 'עולם של חבר')}</h2>
         ${session.cloudProblem ? `<p class="warn">${esc(session.cloudProblem)}</p>` : ''}
+        ${server && session.shared ? '<p class="small cloud-tag">☁ העולם נשמר בענן. חברים שנכנסים מחוברים עם Google יקבלו אותו לרשימה שלהם ויוכלו להמשיך אותו גם בלעדיך.</p>' : ''}
+        ${server && !session.shared && this.account.configured ? '<p class="small">💡 רוצים שהעולם יישמר וחברים יוכלו להמשיך אותו גם בלעדיך? התחברו עם Google בתפריט הראשי.</p>' : ''}
         <button class="btn primary" data-a="resume">חזרה למשחק</button>
         ${invite}
         ${c.hosting ? `<button class="btn" data-a="mode">מצב משחק: ${c.creative ? 'יצירתי' : 'הישרדות'}</button>` : ''}
