@@ -33,7 +33,7 @@ export type ClientMsg =
   | { t: 'useItem'; phase: 0 | 1 | 2; slot: number }
   /** Q: drop one (or the whole stack) of the held item. */
   | { t: 'drop'; all: boolean }
-  | { t: 'attack'; entityId: number } // (stage 5)
+  | { t: 'attack'; entityId: number }
   /** Click in a window (see Window.ts); window 0 is the player's inventory. */
   | { t: 'inv'; window: number; action: number; slot: number; button: number; item?: number }
   | { t: 'closeWindow'; window: number }
@@ -95,6 +95,11 @@ export type ServerMsg =
   | { t: 'entityDespawn'; id: number; pickedBy?: number }
   /** Positions of moving entities, flat [id, x, y, z, …]. */
   | { t: 'entityMove'; data: number[] }
+  /** Creature movement, flat [id, x, y, z, yaw, anim, …] (10 Hz). */
+  | { t: 'mobMove'; data: number[] }
+  | { t: 'entityEvent'; id: number; event: 'hurt' | 'death' | 'spores' }
+  /** The host pushes this player (hit by a creature). */
+  | { t: 'knockback'; vx: number; vy: number; vz: number }
   /** Other players' positions (10 Hz). */
   | { t: 'snapshot'; entities: EntityState[] }
   | { t: 'teleport'; x: number; y: number; z: number }
@@ -115,11 +120,8 @@ export type ServerMsg =
   | { t: 'ping'; id: number }
   | { t: 'kick'; reason: string };
 
-export interface EntityInfo {
-  id: number;
-  kind: 'item';
-  x: number;
-  y: number;
-  z: number;
-  item: ItemStack;
-}
+export type EntityInfo =
+  | { id: number; kind: 'item'; x: number; y: number; z: number; item: ItemStack }
+  | { id: number; kind: 'mob'; mob: number; x: number; y: number; z: number; yaw: number }
+  /** A flying thorn; clients extrapolate it from its launch velocity. */
+  | { id: number; kind: 'projectile'; x: number; y: number; z: number; vx: number; vy: number; vz: number };

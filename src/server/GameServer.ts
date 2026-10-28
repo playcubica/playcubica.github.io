@@ -14,6 +14,8 @@ import type { BlockEntity } from '../shared/world/blockEntities';
 import { Chunk, chunkKey, idx } from '../shared/world/Chunk';
 import type { Transport } from '../net/Transport';
 import { ItemEntities } from './ItemEntities';
+import { MobManager, type MobTarget } from './mobs/MobManager';
+import { Mob, mobDef, PLAYER_ATTACK_COOLDOWN, PLAYER_ATTACK_REACH } from '../shared/entities/mobs';
 import { MAX_AIR, MAX_FOOD, MAX_HEALTH, PlayerSession, type OpenWindow } from './PlayerSession';
 import { WorldGenerator } from './worldgen/WorldGenerator';
 import { ashwoodTree, frostpineTree, TREE_HEIGHT } from './worldgen/trees';
@@ -43,7 +45,18 @@ const DEATH_MESSAGES: Record<string, string> = {
   fall: 'נפלת מגובה רב',
   drown: 'טבעת',
   starve: 'גוועת ברעב',
+  thorn: 'נדקרת מקוץ של קוצן',
+  spores: 'נחנקת בענן נבגים של פטריון',
 };
+
+function deathMessage(cause: string): string {
+  if (cause.startsWith('mob:')) {
+    const key = cause.slice(4);
+    const def = Object.values(Mob).map((k) => mobDef(k)!).find((d) => d.key === key);
+    return `הובסת על ידי ${def?.name ?? 'יצור'}`;
+  }
+  return DEATH_MESSAGES[cause] ?? 'מתת';
+}
 
 const posKey = (x: number, y: number, z: number) => `${x},${y},${z}`;
 
@@ -64,7 +77,11 @@ export class GameServer {
   readonly spawn: Vec3;
   readonly meta: WorldMeta;
   readonly items: ItemEntities;
+  readonly mobs: MobManager;
+  /** Spawning can be switched off (tests, peaceful worlds later). */
+  mobSpawning = true;
   time: number;
+  private nextEntityId = 1;
   private readonly players = new Map<number, PlayerSession>();
   /** Furnaces that are burning or have work queued, by "x,y,z". */
   private readonly furnaces = new Map<string, Vec3>();
@@ -84,7 +101,23 @@ export class GameServer {
     this.world = new ServerWorld(generator, options.store);
     this.world.onLoad = (c) => this.chunkLoaded(c);
     this.spawn = new WorldGenerator(this.meta.seed).findSpawn();
-    this.items = new ItemEntities(this.world, {
+    const allocId = () => this.nextEntityId++;
+    this.mobs = new MobManager(this.world, allocId, {
+      spawned: (info) => this.toChunkViewers(info.x, info.z, { t: 'entitySpawn', entity: info }),
+      despawned: (id) => this.broadcast({ t: 'entityDespawn', id }),
+      moved: (list) => {
+        for (const p of this.players.values()) {
+          const data: number[] = [];
+          for (const m of list) {
+            if (p.sent.has(chunkKey(Math.floor(m.x) >> 4, Math.floor(m.z) >> 4))) data.push(m.id, m.x, m.y, m.z, m.yaw, m.anim);
+          }
+          if (data.length > 0) p.send({ t: 'mobMove', data });
+        }
+      },
+      event: (id, event, x, z) => this.toChunkViewers(x, z, { t: 'entityEvent', id, event }),
+      drops: (items, x, y, z) => this.items.spawnDrops(items, x, y, z),
+    });
+    this.items = new ItemEntities(this.world, allocId, {
       spawned: (e) => this.toChunkViewers(e.x, e.z, { t: 'entitySpawn', entity: ItemEntities.info(e) }),
       despawned: (e, pickedBy) => this.broadcast({ t: 'entityDespawn', id: e.id, pickedBy }),
       moved: (list) => {
@@ -233,6 +266,9 @@ export class GameServer {
       case 'chat':
         this.chatMessage(p, String(msg.text ?? ''));
         break;
+      case 'attack':
+        this.attack(p, msg.entityId | 0);
+        break;
       case 'pong':
         if (p.pendingPing && p.pendingPing.id === msg.id) {
           p.rtt = performance.now() - p.pendingPing.at;
@@ -378,6 +414,7 @@ export class GameServer {
 
   private tickPlayer(p: PlayerSession): void {
     if (!p.alive) return;
+    if (p.hurtCooldown > 0) p.hurtCooldown--;
     if (p.creative) {
       p.air = MAX_AIR;
       p.sendStats();
@@ -410,6 +447,56 @@ export class GameServer {
     p.sendStats();
   }
 
+  /** Adapter the creature AI uses to find and hurt players. */
+  private mobTargets(): MobTarget[] {
+    return [...this.players.values()].filter((p) => p.joined).map((p) => ({
+      id: p.id,
+      pos: p.pos,
+      alive: p.alive,
+      creative: p.creative,
+      hurt: (amount: number, cause: string, from: readonly number[]) => {
+        if (p.hurtCooldown > 0 || !p.alive || p.creative) return;
+        p.hurtCooldown = 10;
+        const dx = p.pos[0] - from[0];
+        const dz = p.pos[2] - from[2];
+        const len = Math.hypot(dx, dz) || 1;
+        p.send({ t: 'knockback', vx: (dx / len) * 7, vy: 5, vz: (dz / len) * 7 });
+        this.damage(p, amount, cause);
+      },
+    }));
+  }
+
+  private attack(p: PlayerSession, mobId: number): void {
+    const now = performance.now();
+    if (now - p.lastAttackAt < PLAYER_ATTACK_COOLDOWN * 1000 * TIME_TOLERANCE) return;
+    const m = this.mobs.mobs.get(mobId);
+    if (!m) return;
+    const b = m.body;
+    const ex = p.pos[0];
+    const ey = p.pos[1] + EYE_HEIGHT;
+    const ez = p.pos[2];
+    // Distance from the eye to the nearest point of the creature's box.
+    const cx = Math.max(b.x - b.width / 2, Math.min(ex, b.x + b.width / 2));
+    const cy = Math.max(b.y, Math.min(ey, b.y + b.height));
+    const cz = Math.max(b.z - b.width / 2, Math.min(ez, b.z + b.width / 2));
+    if (Math.hypot(cx - ex, cy - ey, cz - ez) > PLAYER_ATTACK_REACH + REACH_SLACK) return;
+    p.lastAttackAt = now;
+    p.swingUntil = now + 300;
+    const held = p.inventory.held;
+    const tool = held ? itemDef(held.id)?.tool : undefined;
+    const dmg = !tool ? 1 : tool.kind === 'sword' ? tool.damage : tool.kind === 'axe' ? tool.damage - 1 : 2;
+    if (!this.mobs.hit(mobId, dmg, p.pos)) return;
+    p.addExhaustion(0.1);
+    if (held && tool && !p.creative) {
+      held.dmg = (held.dmg ?? 0) + (tool.kind === 'sword' ? 1 : 2);
+      if (held.dmg >= tool.durability) {
+        p.inventory.slots[p.inventory.selected] = null;
+        this.chat(p, `${itemDef(held.id)?.name} נשבר!`);
+      }
+      p.sendInventory();
+    }
+  }
+
   private damage(p: PlayerSession, amount: number, cause: string): void {
     if (!p.alive || p.creative || amount <= 0) return;
     p.health = Math.max(0, p.health - amount);
@@ -432,7 +519,8 @@ export class GameServer {
     }
     p.sendInventory();
     p.sendStats(true);
-    p.send({ t: 'death', message: DEATH_MESSAGES[cause] ?? 'מתת' });
+    p.send({ t: 'death', message: deathMessage(cause) });
+    if (this.players.size > 1) this.broadcastChat(`${p.name}: ${deathMessage(cause)}`);
   }
 
   private respawn(p: PlayerSession): void {
@@ -653,6 +741,10 @@ export class GameServer {
       this.chat(p, 'נקודת הלידה נקבעה כאן. אפשר לישון רק בלילה.');
       return;
     }
+    if (this.mobs.hostilesNear(p.pos[0], p.pos[1], p.pos[2], 10) > 0) {
+      this.chat(p, 'אי אפשר לישון כשיצורים עוינים בקרבת מקום.');
+      return;
+    }
     p.sleptAt = performance.now();
     const awake = [...this.players.values()].filter((q) => q.alive && performance.now() - q.sleptAt > 3000);
     if (awake.length > 0) {
@@ -687,8 +779,32 @@ export class GameServer {
   private command(p: PlayerSession, [cmd, ...args]: string[]): void {
     switch (cmd) {
       case 'help':
-        this.chat(p, 'פקודות: /list — מי מחובר · /kick שם — הוצאת שחקן (מארח בלבד)');
+        this.chat(p, 'פקודות: /list — מי מחובר · /kick שם — הוצאת שחקן · /time day|night · /summon יצור (מארח בלבד)');
         break;
+      case 'time': {
+        if (!p.isHost) {
+          this.chat(p, 'רק המארח יכול לשנות את השעה.');
+          break;
+        }
+        const target = args[0] === 'night' ? 14000 : args[0] === 'day' ? 1000 : NaN;
+        if (Number.isNaN(target)) {
+          this.chat(p, 'שימוש: /time day או /time night');
+          break;
+        }
+        this.time += ((target - this.dayTime) + DAY_LENGTH_TICKS) % DAY_LENGTH_TICKS;
+        this.broadcast({ t: 'time', time: this.time });
+        break;
+      }
+      case 'summon': {
+        const def = Object.values(Mob).map((k) => mobDef(k)!).find((d) => d.key === args[0] || d.name === args[0]);
+        if (!p.isHost || !def) {
+          this.chat(p, p.isHost ? `יצורים: ${Object.values(Mob).map((k) => mobDef(k)!.key).join(', ')}` : 'רק המארח יכול לזמן יצורים.');
+          break;
+        }
+        const d = 3;
+        this.mobs.spawn(def.kind, p.pos[0] - Math.sin(p.yaw) * d, p.pos[1] + 0.5, p.pos[2] - Math.cos(p.yaw) * d);
+        break;
+      }
       case 'list':
         this.chat(p, `מחוברים: ${[...this.players.values()].filter((q) => q.joined).map((q) => q.name).join(', ')}`);
         break;
@@ -938,6 +1054,9 @@ export class GameServer {
     }
     if (this.tickCount % 100 === 0) this.sendPlayerList();
     this.items.tick(this.players.values(), this.tickCount);
+    const targets = this.mobTargets();
+    this.mobs.tick(targets, this.time, this.tickCount);
+    if (this.mobSpawning && this.tickCount % 20 === 0) this.mobs.spawnTick(targets, this.time);
     this.tickFurnaces();
     this.randomTicks();
     if (this.tickCount % 100 === 0) this.unloadFarChunks();
@@ -981,6 +1100,7 @@ export class GameServer {
           p.send({ t: 'chunk', cx, cz, data: this.world.encodedBytes(c) });
           p.sent.set(key, [cx, cz]);
           for (const e of this.items.inChunk(cx, cz)) p.send({ t: 'entitySpawn', entity: ItemEntities.info(e) });
+          for (const info of this.mobs.inChunk(cx, cz)) p.send({ t: 'entitySpawn', entity: info });
           sent++;
         }
       } else if (!saturated && !this.world.request(cx, cz)) {
@@ -1005,7 +1125,8 @@ export class GameServer {
     const centers = [...this.players.values()].map((p) => [Math.floor(p.pos[0] / 16), Math.floor(p.pos[2] / 16)]);
     const keep = (cx: number, cz: number) => centers.some(([px, pz]) => (cx - px) ** 2 + (cz - pz) ** 2 <= keepR);
     const unsaved = this.world.unloadWhere(keep);
-    // Items on unloaded ground vanish (they are not saved).
+    // Creatures and items on unloaded ground vanish (they are not saved).
+    this.mobs.removeWhere((x, z) => !keep(Math.floor(x) >> 4, Math.floor(z) >> 4));
     for (const e of [...this.items.all.values()]) {
       if (!keep(Math.floor(e.x) >> 4, Math.floor(e.z) >> 4)) {
         this.items.all.delete(e.id);

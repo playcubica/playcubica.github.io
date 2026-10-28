@@ -23,6 +23,7 @@ import { WindowScreen, type OpenWindowState, type WindowHost } from './ui/Window
 import { setIconAtlas } from './ui/icons';
 import { EntityRenderer } from './render/EntityRenderer';
 import { PlayerModels } from './render/PlayerModels';
+import { MobRenderer } from './render/MobRenderer';
 import { ChatInput, PlayerListView } from './ui/Social';
 import type { PlayerListEntry } from '../shared/protocol/messages';
 
@@ -65,6 +66,7 @@ export class GameClient implements InteractionHost, WindowHost {
   private readonly windowScreen: WindowScreen;
   private readonly entities: EntityRenderer;
   private readonly others: PlayerModels;
+  private readonly mobs: MobRenderer;
   private readonly chatInput: ChatInput;
   private readonly playerList: PlayerListView;
   private playerId = 0;
@@ -120,6 +122,7 @@ export class GameClient implements InteractionHost, WindowHost {
     this.windowScreen = new WindowScreen(container, this);
     this.entities = new EntityRenderer(this.renderer.scene, this.world);
     this.others = new PlayerModels(this.renderer.scene, this.world);
+    this.mobs = new MobRenderer(this.renderer.scene, this.world);
     this.chatInput = new ChatInput(container);
     this.chatInput.onSend = (text) => this.send({ t: 'chat', text });
     this.chatInput.onClose = () => {
@@ -171,6 +174,10 @@ export class GameClient implements InteractionHost, WindowHost {
 
   predictBlock(x: number, y: number, z: number, id: number): void {
     this.applyBlock(x, y, z, id);
+  }
+
+  pickEntity(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number): { id: number; distance: number } | null {
+    return this.mobs.pick(origin, dir, maxDist);
   }
 
   playerBox(): { min: number[]; max: number[] } {
@@ -327,6 +334,7 @@ export class GameClient implements InteractionHost, WindowHost {
     this.windowScreen.dispose();
     this.entities.dispose();
     this.others.dispose();
+    this.mobs.dispose();
     this.chatInput.dispose();
     this.playerList.dispose();
     this.debug.el.remove();
@@ -412,10 +420,21 @@ export class GameClient implements InteractionHost, WindowHost {
         this.player.teleport(msg.x, msg.y, msg.z);
         break;
       case 'entitySpawn':
-        this.entities.spawn(msg.entity);
+        if (msg.entity.kind === 'item') this.entities.spawn(msg.entity);
+        else this.mobs.spawn(msg.entity);
         break;
       case 'entityDespawn':
         this.entities.remove(msg.id);
+        this.mobs.remove(msg.id);
+        break;
+      case 'mobMove':
+        this.mobs.move(msg.data);
+        break;
+      case 'entityEvent':
+        this.mobs.event(msg.id, msg.event);
+        break;
+      case 'knockback':
+        this.player.body.push(msg.vx, msg.vy, msg.vz);
         break;
       case 'entityMove':
         this.entities.move(msg.data);
@@ -475,6 +494,7 @@ export class GameClient implements InteractionHost, WindowHost {
         this.world.remove(msg.cx, msg.cz);
         this.meshes.remove(msg.cx, msg.cz);
         this.entities.removeInChunk(msg.cx, msg.cz);
+        this.mobs.removeInChunk(msg.cx, msg.cz);
       } else {
         const touched = this.world.add(decodeChunk(msg.data));
         for (const c of touched) this.meshes.markAround(c.cx, c.cz);
@@ -530,6 +550,7 @@ export class GameClient implements InteractionHost, WindowHost {
     this.meshes.update(body.x, body.z);
     this.entities.update(dt, sky.daylight);
     this.others.update(dt, sky.daylight);
+    this.mobs.update(dt, sky.daylight);
     if (this.options.remote && this.state !== 'disconnected' && performance.now() - this.lastHostMessage > HOST_TIMEOUT_MS) {
       this.transport.close('המארח לא מגיב');
       this.disconnect('המארח לא הגיב 20 שניות — ייתכן שהוא סגר את המשחק או שהחיבור נפל.');
@@ -578,13 +599,13 @@ export class GameClient implements InteractionHost, WindowHost {
     const tg = this.interaction.target;
     const state = [b.onGround && 'ground', b.inWater && 'water', b.flying && 'flying', b.sneaking && 'sneak', b.sprinting && 'sprint'].filter(Boolean).join(' ');
     this.debug.set([
-      'Cubica 0.4 (stage 4)',
+      'Cubica 0.5 (stage 5)',
       `${this.fps} fps  (cpu ${this.frameMs.toFixed(1)} ms)  draws ${info.calls}  tris ${Math.round(info.triangles / 1000)}k`,
       `XYZ ${b.x.toFixed(2)} / ${b.y.toFixed(2)} / ${b.z.toFixed(2)}  ${state}`,
       `Chunk ${bx >> 4} ${bz >> 4}  facing ${facing}`,
       `Biome ${biome}  light sky ${light >> 4} block ${light & 15}`,
-      tg ? `Target ${blockDef(tg.id)?.name} @ ${tg.x} ${tg.y} ${tg.z}` : 'Target -',
-      `Mode ${this.creative ? 'creative' : 'survival'}  chunks ${this.world.chunks.size}  meshed ${this.meshes.meshedCount}  items ${this.entities.count}  players ${this.others.count + 1}`,
+      tg ? `Target ${blockDef(tg.id)?.name} @ ${tg.x} ${tg.y} ${tg.z}` : this.interaction.entityTarget !== null ? `Target creature #${this.interaction.entityTarget}` : 'Target -',
+      `Mode ${this.creative ? 'creative' : 'survival'}  chunks ${this.world.chunks.size}  meshed ${this.meshes.meshedCount}  items ${this.entities.count}  players ${this.others.count + 1}  mobs ${this.mobs.count}`,
       `Seed ${this.seed}  day ${Math.floor(this.time / DAY_LENGTH_TICKS) + 1}  ${clock}`,
     ]);
   }

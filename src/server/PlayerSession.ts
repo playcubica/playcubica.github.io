@@ -62,6 +62,9 @@ export class PlayerSession {
   /** Last message received from this client (ms). */
   lastSeen = performance.now();
   pendingPing: { id: number; at: number } | null = null;
+  /** Ticks left during which creatures can't hurt this player again. */
+  hurtCooldown = 0;
+  lastAttackAt = 0;
   rtt = -1;
   regenTimer = 0;
   starveTimer = 0;

@@ -35,10 +35,11 @@ const DT = 1 / 20;
 
 export class ItemEntities {
   readonly all = new Map<number, ItemEntity>();
-  private nextId = 1;
 
   constructor(
     private readonly world: SolidQuery,
+    /** Entity ids are shared with creatures, so the host hands them out. */
+    private readonly nextId: () => number,
     private readonly events: {
       spawned(e: ItemEntity): void;
       despawned(e: ItemEntity, pickedBy?: number): void;
@@ -48,7 +49,7 @@ export class ItemEntities {
 
   spawn(item: ItemStack, x: number, y: number, z: number, vx = 0, vy = 0, vz = 0, pickupDelay = 10): void {
     if (item.count <= 0) return;
-    const e: ItemEntity = { id: this.nextId++, item: { ...item }, x, y, z, vx, vy, vz, age: 0, pickupDelay, resting: false };
+    const e: ItemEntity = { id: this.nextId(), item: { ...item }, x, y, z, vx, vy, vz, age: 0, pickupDelay, resting: false };
     this.all.set(e.id, e);
     this.events.spawned(e);
   }

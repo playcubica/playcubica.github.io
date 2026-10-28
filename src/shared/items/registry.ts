@@ -47,6 +47,13 @@ export const I = {
   ASHFRUIT: 4103,
   BAKED_ASHFRUIT: 4104,
   FROSTBERRIES: 4105,
+  RAW_MEAT: 4106,
+  COOKED_MEAT: 4107,
+  FLEECE: 4108,
+  HIDE: 4109,
+  SILK: 4110,
+  GLOOM_ASH: 4111,
+  SPORE_POWDER: 4112,
 } as const;
 
 export const TIERS = ['wood', 'stone', 'iron', 'gold', 'diamond'] as const;
@@ -116,6 +123,13 @@ item(I.DIAMOND, 'diamond', 'יהלום');
 item(I.ASHFRUIT, 'ashfruit', 'פרי אפר', { food: { hunger: 4, saturation: 2.4 } });
 item(I.BAKED_ASHFRUIT, 'baked_ashfruit', 'פרי אפר אפוי', { food: { hunger: 7, saturation: 8 } });
 item(I.FROSTBERRIES, 'frostberries', 'פירות כפור', { food: { hunger: 2, saturation: 0.6 } });
+item(I.RAW_MEAT, 'raw_meat', 'בשר נא', { food: { hunger: 3, saturation: 1.8 } });
+item(I.COOKED_MEAT, 'cooked_meat', 'בשר צלוי', { food: { hunger: 8, saturation: 12.8 } });
+item(I.FLEECE, 'fleece', 'צמר');
+item(I.HIDE, 'hide', 'עור');
+item(I.SILK, 'silk', 'חוט משי');
+item(I.GLOOM_ASH, 'gloom_ash', 'אפר אפלה', { fuel: 800 });
+item(I.SPORE_POWDER, 'spore_powder', 'אבקת נבגים');
 
 TIERS.forEach((tier, t) => {
   const st = TIER_STATS[tier];
@@ -159,6 +173,7 @@ export const CREATIVE_ITEMS: number[] = [
   B.DIAMOND_ORE, B.LUMEN_CRYSTAL, B.WORKBENCH, B.FURNACE, B.CHEST, B.BEDROLL, B.TORCH, B.ASHWOOD_DOOR,
   B.TALL_GRASS, B.SUNBLOOM, B.BLUEBELL, B.DRY_SCRUB, B.ASHWOOD_SAPLING, B.FROSTPINE_SAPLING, B.WATER,
   I.STICK, I.COAL, I.RAW_IRON, I.RAW_GOLD, I.IRON_INGOT, I.GOLD_INGOT, I.DIAMOND,
-  I.ASHFRUIT, I.BAKED_ASHFRUIT, I.FROSTBERRIES,
+  I.ASHFRUIT, I.BAKED_ASHFRUIT, I.FROSTBERRIES, I.RAW_MEAT, I.COOKED_MEAT,
+  I.FLEECE, I.HIDE, I.SILK, I.GLOOM_ASH, I.SPORE_POWDER,
   ...TIERS.flatMap((_, t) => TOOL_KINDS.map((__, k) => toolId(t, k))),
 ].filter((id) => items[id]);

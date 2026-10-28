@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DAY_LENGTH_TICKS } from '../../shared/constants';
+import { dayFraction, daylight as daylightAt, sunHeight } from '../../shared/time';
 import { mulberry32 } from '../../shared/rng';
 
 // Sky dome, sun, moon and stars. Time 0 is sunrise, 6000 noon, 12000 sunset, 18000 midnight.
@@ -111,12 +111,10 @@ export class Sky {
   }
 
   update(time: number, camera: THREE.Camera): SkyState {
-    const t = (((time % DAY_LENGTH_TICKS) + DAY_LENGTH_TICKS) % DAY_LENGTH_TICKS) / DAY_LENGTH_TICKS;
-    const angle = t * Math.PI * 2;
-    const sunHeight = Math.sin(angle);
-    const daylight = THREE.MathUtils.smoothstep(sunHeight, -0.18, 0.22);
+    const angle = dayFraction(time) * Math.PI * 2;
+    const daylight = daylightAt(time);
     // Sunrise/sunset glow when the sun is near the horizon.
-    const dusk = Math.max(0, 1 - Math.abs(sunHeight) / 0.3);
+    const dusk = Math.max(0, 1 - Math.abs(sunHeight(time)) / 0.3);
 
     this.domeUniforms.uTop.value.copy(NIGHT_TOP).lerp(DAY_TOP, daylight);
     const horizon = this.domeUniforms.uHorizon.value.copy(NIGHT_HORIZON).lerp(DAY_HORIZON, daylight).lerp(DUSK_HORIZON, dusk * 0.55);

@@ -116,6 +116,21 @@ function fruit(body: RGB, leaf: boolean): Pixmap {
   return p;
 }
 
+function meat(c: RGB, fat: RGB): Pixmap {
+  const p = blank();
+  for (let y = 4; y < 13; y++) for (let x = 2; x < 14; x++) {
+    const d = Math.hypot((x - 7.5) / 5.5, (y - 8.5) / 4);
+    if (d > 1) continue;
+    p.set(x, y, d > 0.8 ? fat : shade(c, 0.9 + (1 - d) * 0.25));
+  }
+  // Bone end.
+  p.set(12, 5, [240, 236, 220]);
+  p.set(13, 4, [240, 236, 220]);
+  p.set(14, 4, [240, 236, 220]);
+  p.set(13, 3, [240, 236, 220]);
+  return p;
+}
+
 const PAINTERS: Record<number, () => Pixmap> = {
   [I.STICK]: () => {
     const p = blank();
@@ -152,6 +167,46 @@ const PAINTERS: Record<number, () => Pixmap> = {
     }
     p.set(8, 2, [60, 110, 70]);
     p.set(8, 3, [60, 110, 70]);
+    return p;
+  },
+  [I.RAW_MEAT]: () => meat([200, 70, 70], [240, 200, 190]),
+  [I.COOKED_MEAT]: () => meat([150, 82, 44], [222, 170, 110]),
+  [I.FLEECE]: () => {
+    const p = blank();
+    const r = mulberry32(21);
+    for (let n = 0; n < 9; n++) {
+      const cx = 4 + r() * 8;
+      const cy = 5 + r() * 7;
+      for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+        const d = Math.hypot(x - cx, y - cy);
+        if (d < 2.6) p.set(x, y, shade([236, 230, 214], 0.85 + (2.6 - d) * 0.06));
+      }
+    }
+    return p;
+  },
+  [I.HIDE]: () => {
+    const p = blank();
+    for (let y = 3; y < 14; y++) for (let x = 2; x < 14; x++) {
+      const edge = (x === 2 || x === 13) && (y < 5 || y > 11);
+      if (edge) continue;
+      p.set(x, y, shade([150, 96, 58], 0.9 + ((x * 7 + y * 3) % 5) * 0.03));
+    }
+    for (let x = 4; x < 12; x += 3) p.set(x, 8, [110, 68, 40]);
+    return p;
+  },
+  [I.SILK]: () => {
+    const p = blank();
+    for (let t = 0; t < 40; t++) {
+      const a = t / 40 * Math.PI * 3;
+      const x = Math.round(8 + Math.cos(a) * (2 + t / 10));
+      const y = Math.round(8 + Math.sin(a) * (2 + t / 10));
+      p.set(x, y, [232, 236, 240]);
+    }
+    return p;
+  },
+  [I.GLOOM_ASH]: () => lump([70, 58, 86], [150, 120, 190], 31),
+  [I.SPORE_POWDER]: () => {
+    const p = lump([110, 200, 170], [200, 255, 235], 41);
     return p;
   },
   [B.ASHWOOD_DOOR]: () => {

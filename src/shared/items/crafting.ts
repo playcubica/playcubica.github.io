@@ -19,7 +19,8 @@ interface Shapeless {
 
 const PLANKS = [B.ASHWOOD_PLANKS, B.FROSTPINE_PLANKS];
 const LOGS = [B.ASHWOOD_LOG, B.FROSTPINE_LOG];
-const LEAVES = [B.ASHWOOD_LEAVES, B.FROSTPINE_NEEDLES];
+/** Soft materials for a bedroll. */
+const SOFT = [B.ASHWOOD_LEAVES, B.FROSTPINE_NEEDLES, I.FLEECE, I.HIDE, I.SILK];
 const TIER_MATERIAL: Ingredient[] = [PLANKS, B.RUBBLESTONE, I.IRON_INGOT, I.GOLD_INGOT, I.DIAMOND];
 
 /** Head/blade shapes by tool kind: pickaxe, axe, shovel, sword. */
@@ -30,7 +31,8 @@ const shaped: Shaped[] = [
   { pattern: ['RRR', 'R R', 'RRR'], keys: { R: B.RUBBLESTONE }, result: { id: B.FURNACE, count: 1 } },
   { pattern: ['PPP', 'P P', 'PPP'], keys: { P: PLANKS }, result: { id: B.CHEST, count: 1 } },
   { pattern: ['C', 'S'], keys: { C: I.COAL, S: I.STICK }, result: { id: B.TORCH, count: 4 } },
-  { pattern: ['LLL', 'PPP'], keys: { L: LEAVES, P: PLANKS }, result: { id: B.BEDROLL, count: 1 } },
+  { pattern: ['LLL', 'PPP'], keys: { L: SOFT, P: PLANKS }, result: { id: B.BEDROLL, count: 1 } },
+  { pattern: ['SS', 'SS'], keys: { S: I.SPORE_POWDER }, result: { id: B.LUMEN_CRYSTAL, count: 1 } },
   { pattern: ['PP', 'PP', 'PP'], keys: { P: PLANKS }, result: { id: B.ASHWOOD_DOOR, count: 3 } },
   { pattern: ['SS', 'SS'], keys: { S: B.STONE }, result: { id: B.CUT_STONE, count: 4 } },
 ];
@@ -112,6 +114,7 @@ export const SMELTING: ReadonlyMap<number, number> = new Map([
   [B.SAND, B.GLASS],
   [B.RUBBLESTONE, B.STONE],
   [I.ASHFRUIT, I.BAKED_ASHFRUIT],
+  [I.RAW_MEAT, I.COOKED_MEAT],
   ...LOGS.map((l) => [l, I.COAL] as [number, number]),
 ]);
 

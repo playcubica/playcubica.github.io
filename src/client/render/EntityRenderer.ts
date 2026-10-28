@@ -37,7 +37,7 @@ export class EntityRenderer {
     return t;
   }
 
-  spawn(e: EntityInfo): void {
+  spawn(e: Extract<EntityInfo, { kind: 'item' }>): void {
     this.remove(e.id);
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.texture(e.item.id), transparent: true, alphaTest: 0.3, fog: false }));
     sprite.scale.setScalar(e.item.count > 1 ? 0.42 : 0.36);

@@ -3,6 +3,7 @@ import { B, DOOR_OPEN, DOOR_UPPER, OPAQUE, RENDER, REPLACEABLE, SOLID, withState
 import { isInteractive, isSupported, placementRaw } from '../../shared/blocks/placement';
 import type { Inventory } from '../../shared/items/Inventory';
 import { breakTime, CREATIVE_BREAK_DELAY, EAT_TIME, REACH } from '../../shared/items/mining';
+import { PLAYER_ATTACK_COOLDOWN, PLAYER_ATTACK_REACH } from '../../shared/entities/mobs';
 import { itemDef } from '../../shared/items/registry';
 import { boxOverlapsBlock } from '../../shared/physics/collision';
 import { raycast, type RayHit } from '../../shared/physics/raycast';
@@ -23,6 +24,8 @@ export interface InteractionHost {
   playerBox(): { min: number[]; max: number[] };
   /** Creative "pick block": put this block in the hotbar. */
   pickBlock(id: number): void;
+  /** Nearest creature under the crosshair. */
+  pickEntity(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number): { id: number; distance: number } | null;
 }
 
 const PLACE_REPEAT = 0.22;
@@ -68,6 +71,10 @@ function crackTextures(): THREE.Texture[] {
 /** Targeting, mining (with progress and cracks), placing, using blocks and eating. */
 export class BlockInteraction {
   target: RayHit | null = null;
+  /** Creature under the crosshair (takes priority over a block behind it). */
+  entityTarget: number | null = null;
+  /** performance.now() of the last attack (real time, so low frame rates don't slow attacks). */
+  private lastAttack = 0;
   /** 0..1 while eating, else null. */
   eating: number | null = null;
   private dig: { x: number; y: number; z: number; progress: number; need: number } | null = null;
@@ -102,6 +109,13 @@ export class BlockInteraction {
   update(dt: number, eye: THREE.Vector3, dir: THREE.Vector3): void {
     const w = this.host.world;
     this.target = raycast((x, y, z) => w.getBlock(x, y, z), targetable, eye.x, eye.y, eye.z, dir.x, dir.y, dir.z, REACH);
+    const ent = this.host.pickEntity(eye, dir, PLAYER_ATTACK_REACH);
+    this.entityTarget = null;
+    if (ent && (!this.target || ent.distance < this.target.distance)) {
+      this.entityTarget = ent.id;
+      this.target = null;
+    }
+    if (this.entityTarget !== null && this.controls.isButtonDown(MouseButton.LEFT)) this.attack();
     const t = this.target;
     this.outline.visible = !!t;
     if (t) this.outline.position.set(t.x + 0.5, t.y + 0.5, t.z + 0.5);
@@ -148,9 +162,17 @@ export class BlockInteraction {
       }
     } else if (button === MouseButton.LEFT) {
       this.breakCooldown = 0;
+      if (this.entityTarget !== null) this.attack();
     } else if (button === MouseButton.MIDDLE && t && this.host.creative) {
       this.host.pickBlock(t.id);
     }
+  }
+
+  private attack(): void {
+    const now = performance.now();
+    if (now - this.lastAttack < PLAYER_ATTACK_COOLDOWN * 1000 || this.entityTarget === null) return;
+    this.lastAttack = now;
+    this.host.send({ t: 'attack', entityId: this.entityTarget });
   }
 
   private useBlock(t: RayHit): void {

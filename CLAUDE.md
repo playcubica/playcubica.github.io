@@ -56,9 +56,13 @@ src/
     items/                registry (items ≥4096, tools, food, fuel), Inventory, Window (container click
                           logic incl. crafting output), crafting (recipes + smelting), mining (breakTime,
                           canHarvest, blockDrops)
-    physics/              PlayerBody (fixed-step movement), collision (AABB sweep), raycast (DDA)
+    physics/              PlayerBody (movement for players AND creatures: width/height/walkSpeed/
+                          climber), collision (AABB sweep), raycast (DDA)
+    entities/mobs.ts      creature definitions (size, health, speed, drops) + combat constants
+    time.ts               day fraction / sun height / daylight (shared by sky and spawning)
     protocol/messages.ts  ClientMsg / ServerMsg
   server/ GameServer.ts ServerWorld.ts WorkerChunkGenerator.ts PlayerSession.ts ItemEntities.ts
+          mobs/MobManager.ts (creature AI, spawning, combat, thorns, spore clouds) mobs/pathfind.ts (A*)
           worldgen/WorldGenerator.ts worldgen/trees.ts (shared by worldgen and sapling growth)
           storage/WorldStorage.ts   IndexedDB worlds + .cubica export/import
   client/ GameClient.ts ClientWorld.ts render/ textures/ input/ ui/ player/LocalPlayer.ts
@@ -67,6 +71,7 @@ src/
           render/EntityRenderer.ts (dropped items as sprites)  textures/itemTextures.ts (item sprites)
           render/PlayerModels.ts (other players: block figure, name tag, interpolation)
           ui/Social.ts (T chat line, Tab player list)
+          render/MobRenderer.ts (creature box models, animation, thorns, spore particles, pick ray)
   net/    Transport.ts LocalTransport.ts PeerTransport.ts peerNetwork.ts (HostNetwork, joinHost,
           invite codes, Hebrew error messages; peerjs is loaded lazily, so single player never touches it)
   workers/ WorkerPool.ts worldgen.worker.ts mesher.worker.ts types.ts
@@ -127,6 +132,34 @@ Host validation already in place: reach (5 + 1.5 slack, from the eye), minimum d
 must touch something, it can't overlap a player, plants need solid ground, creative-only inventory actions.
 Stage 4 added: movement speed limit, chat rate-limit, name checks, timeouts. Fall damage still derives
 from client-reported positions (bounded by the speed check).
+
+### Creatures (stage 5)
+- Original creatures (`shared/entities/mobs.ts`), not 1:1 equivalents of another game's mobs:
+  - Passive: Grazer צמרן (fleece + meat), Tuskling חטון (meat), Stiltfowl רגלון (meat), Hornox קרנוף
+    (hide + meat). Wander; flee when hit.
+  - Hostile: Gloomwalker הולך-אפלה (melee 3, burns in direct sunlight, drops gloom ash = fuel),
+    Thornslinger קוצן (keeps 5–10 blocks away, shoots arcing thorns, drops sticks), Skitterling זחלן
+    (fast, climbs walls, drops silk), Sporecap פטריון (puffs for 1.5 s, then a spore cloud: up to 7
+    damage within 4 blocks; it does NOT explode or break blocks; drops spore powder: 4 → lumen crystal).
+- Host simulation in `MobManager` (20 TPS): bodies reuse `PlayerBody`; A* (`pathfind.ts`, 300 nodes,
+  partial paths when unreachable, closed doors block, climbers path up walls); targets the nearest
+  survival player within 16 blocks; creative players are ignored.
+- Spawning (once a second, `spawnTick`): hostiles in a 24–44 block ring where max(block light,
+  sky light × daylight) ≤ 7 (night surface or caves), cap 10 per player / 30 total; passive herds of 2–3
+  on grass with sky light ≥ 9, cap 8 per player / 24. Despawn beyond 80 blocks (hostiles also randomly
+  beyond 40). Creatures are not saved (they respawn naturally).
+- Combat: left-click a creature (client ray vs. boxes, takes priority over the block behind it).
+  Damage: hand 1, sword = tier damage (4–7), axe = damage − 1, other tools 2; 0.4 s cooldown (host checks
+  70%), reach 4 (+1.5 slack). Hits knock back and give 0.5 s invulnerability. Creatures hurting a
+  player send `knockback`; players get 0.5 s invulnerability against creatures.
+- Sync: `entitySpawn` (kind 'mob' / 'projectile'), `mobMove` 10 Hz [id,x,y,z,yaw,anim], `entityEvent`
+  (hurt/death/spores), `entityDespawn`. Thorns are extrapolated on the client from their launch velocity.
+- New items: raw/cooked meat, fleece, hide, silk (all three also work as the bedroll's soft row),
+  gloom ash (fuel 800), spore powder.
+- Host commands: `/summon <grazer|tuskling|stiltfowl|hornox|gloomwalker|thornslinger|skitterling|sporecap>`,
+  `/time day|night`. Can't sleep with hostiles within 10 blocks.
+- Testing note: when the desktop app's browser pane is hidden it stops requestAnimationFrame; drive
+  frames with `setInterval(() => client.frame(performance.now()), 16)` during browser checks.
 
 ### Multiplayer (stage 4)
 - Host: pause menu → "פתח לחברים" → `HostNetwork.open()` registers peer id `cubica-v1-<CODE>` on the free
@@ -219,7 +252,7 @@ before the user has approved the current one.**
 4. ✅ **P2P multiplayer**: "Open to friends" → code/link `?join=CODE`, PeerJS + public STUN, chunk sync,
    players, blocks, entities, chat (T), player list (Tab), host validation, disconnect handling, up to 8
    players, clear error messages when a connection fails (including symmetric NAT without TURN).
-5. ⏳ **Creatures**: original passive and hostile creatures (no creeper equivalent), light-based spawning,
+5. ✅ **Creatures**: original passive and hostile creatures (no creeper equivalent), light-based spawning,
    A*, combat with knockback.
 6. ⏳ **Extensions**: our own signal/power system, an original dimension with its own portal ritual, rune
    upgrades, farming, settlements with traders, Web Audio sounds and music, settings screen (view distance,

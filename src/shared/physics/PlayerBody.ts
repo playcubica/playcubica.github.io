@@ -1,7 +1,7 @@
 import { sweepAxis, type SolidQuery } from './collision';
 
-// Player movement physics, in blocks and seconds. Runs on the client at a fixed
-// step; the host can re-run it to sanity-check movement (stage 4).
+// Movement physics for players and creatures, in blocks and seconds. Players run it
+// on their client at a fixed step; the host runs it for creatures.
 
 export interface WorldQuery extends SolidQuery {
   isWater(x: number, y: number, z: number): boolean;
@@ -53,12 +53,25 @@ export class PlayerBody {
   sneaking = false;
   sprinting = false;
   horizontalCollision = false;
-  /** Largest downward speed since last touching ground or water (for fall damage, stage 3). */
+  /** Largest downward speed since last touching ground or water. */
   fallSpeed = 0;
+  width = PLAYER_WIDTH;
+  height = PLAYER_HEIGHT;
+  walkSpeed = WALK;
+  /** Creatures that walk up walls (Skitterling). */
+  climber = false;
 
   box(x = this.x, y = this.y, z = this.z): { min: number[]; max: number[] } {
-    const h = PLAYER_WIDTH / 2;
-    return { min: [x - h, y, z - h], max: [x + h, y + PLAYER_HEIGHT, z + h] };
+    const h = this.width / 2;
+    return { min: [x - h, y, z - h], max: [x + h, y + this.height, z + h] };
+  }
+
+  /** Adds an outside push (hits, knockback). */
+  push(vx: number, vy: number, vz: number): void {
+    this.vx += vx;
+    this.vy = Math.max(this.vy, vy);
+    this.vz += vz;
+    this.onGround = false;
   }
 
   get eyeHeight(): number {
@@ -89,10 +102,10 @@ export class PlayerBody {
       speed = input.sprint ? FLY_SPRINT : FLY;
       accel = 10;
     } else if (this.inWater) {
-      speed = WALK * 0.5 * (this.sprinting ? 1.3 : 1);
+      speed = this.walkSpeed * 0.5 * (this.sprinting ? 1.3 : 1);
       accel = WATER_ACCEL;
     } else {
-      speed = this.sneaking ? SNEAK : this.sprinting ? SPRINT : WALK;
+      speed = this.sneaking ? SNEAK : this.sprinting ? this.walkSpeed * (SPRINT / WALK) : this.walkSpeed;
       accel = this.onGround ? GROUND_ACCEL : AIR_ACCEL;
     }
     const k = 1 - Math.exp(-accel * dt);
@@ -109,6 +122,8 @@ export class PlayerBody {
       this.vy += ((input.jump ? SWIM_UP : -WATER_SINK) - this.vy) * kv;
       // Hop out onto a ledge.
       if (input.jump && this.horizontalCollision) this.vy = Math.max(this.vy, 5.5);
+    } else if (this.climber && this.horizontalCollision && input.forward > 0) {
+      this.vy = 3;
     } else {
       if (input.jump && this.onGround) this.vy = JUMP_VELOCITY;
       this.vy = Math.max(this.vy - GRAVITY * dt, -TERMINAL);
