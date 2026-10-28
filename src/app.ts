@@ -1,4 +1,4 @@
-import type { ClientStatus } from './client/GameClient';
+import type { ClientStatus, Succession } from './client/GameClient';
 import { Account } from './cloud/account';
 import { gamepad, Pad, type PadFrame } from './client/input/Gamepad';
 import { FirestoreWorlds, type CloudBackend, type CloudWorldInfo } from './cloud/cloudWorlds';
@@ -511,16 +511,76 @@ export class App {
       button.disabled = true;
       button.textContent = 'מתחבר…';
       try {
-        const token = await this.account.idToken();
-        const { transport, leave } = await joinHost(code);
+        await this.connect(code);
         history.replaceState(null, '', location.pathname);
-        this.show('<div class="panel"><h2>מצטרף לעולם…</h2></div>', { menu: true });
-        this.session = GameSession.remote(this.root, transport, { viewDistance: this.settings.viewDistance, playerName: name, settings: this.settings, token }, (st) => this.status(st), leave);
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err));
       }
     };
     if (auto) button.click();
+  }
+
+  /** Joins the world hosted under `code` (throws a readable message). */
+  private async connect(code: string): Promise<void> {
+    const token = await this.account.idToken();
+    const { transport, leave } = await joinHost(code);
+    this.show('<div class="panel"><h2>מצטרף לעולם…</h2></div>', { menu: true });
+    this.session = GameSession.remote(this.root, transport, { viewDistance: this.settings.viewDistance, playerName: this.playerName, settings: this.settings, token }, (st) => this.status(st), leave);
+  }
+
+  /**
+   * The host of a shared world left: the first signed-in friend hosts it from the cloud under the same
+   * code, and everyone else reconnects to them.
+   */
+  private async carryOn(old: GameSession, next: Succession): Promise<void> {
+    if (this.session === old) this.session = null;
+    await old.stop();
+    const first = next.order[0];
+    if (first.id === next.me && this.account.user && this.storage) {
+      this.show('<div class="panel"><h2>המארח יצא מהעולם</h2><p>את/ה ממשיך/ה לארח את העולם — טוען אותו מהענן…</p></div>', { menu: true });
+      try {
+        const cloud = this.cloud();
+        if (!cloud) throw new Error('צריך להיות מחובר/ת עם Google');
+        let got = null;
+        for (let i = 0; i < 3 && !got; i++) {
+          got = await (await cloud).getWorld(next.worldId).catch(() => null);
+          if (!got) await new Promise((r) => setTimeout(r, 2000));
+        }
+        if (!got) throw new Error('העולם לא נמצא בענן');
+        await this.storage.replaceWorld(got.meta, got.chunks);
+        await this.play(got.meta, { upToDate: true, autoOpen: true, patient: true });
+        return;
+      } catch (err) {
+        this.carryOnFailed(`לא הצלחנו להמשיך לארח: ${err instanceof Error ? err.message : String(err)}`, next.code);
+        return;
+      }
+    }
+    // Someone else takes over: give them a moment, then keep trying the same code for about a minute.
+    this.show(`<div class="panel"><h2>המארח יצא מהעולם</h2><p>${esc(first.name)} ממשיך/ה לארח — מתחברים מחדש…</p></div>`, { menu: true });
+    let lastError = '';
+    for (let attempt = 0; attempt < 15; attempt++) {
+      await new Promise((r) => setTimeout(r, attempt === 0 ? 5000 : 4000));
+      if (this.session) return; // the player went somewhere else meanwhile
+      try {
+        await this.connect(next.code);
+        return;
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+      }
+    }
+    this.carryOnFailed(lastError, next.code);
+  }
+
+  private carryOnFailed(message: string, code: string): void {
+    const s = this.show(`
+      <div class="panel">
+        <h2>החיבור נותק</h2>
+        <p>${esc(message)}</p>
+        <button class="btn primary" data-a="retry">נסה להתחבר שוב</button>
+        <button class="btn" data-a="menu">חזרה לתפריט</button>
+      </div>`, { menu: true });
+    el(s, '[data-a=retry]').onclick = () => this.joinMenu(code, true);
+    el(s, '[data-a=menu]').onclick = () => this.mainMenu();
   }
 
   // --- In game ------------------------------------------------------------------
@@ -529,7 +589,7 @@ export class App {
    * Hosts a world. `upToDate`: the local copy was just downloaded. `autoOpen`: the world is shared,
    * so it opens to friends right away under its fixed code.
    */
-  private async play(meta: WorldMeta, opts: { upToDate?: boolean; autoOpen?: boolean } = {}): Promise<void> {
+  private async play(meta: WorldMeta, opts: { upToDate?: boolean; autoOpen?: boolean; patient?: boolean } = {}): Promise<void> {
     this.show('<div class="panel"><h2>טוען עולם…</h2></div>', { menu: true });
     let cloud: CloudBackend | null = null;
     try {
@@ -550,7 +610,7 @@ export class App {
       // A world that was opened to friends before (it has its code) or is shared opens again by
       // itself, so the code friends have always works while someone plays it.
       if (opts.autoOpen || meta.inviteCode) {
-        session.openToFriends().catch((err) => console.warn('could not open to friends', err)).finally(() => {
+        session.openToFriends(false, opts.patient).catch((err) => console.warn('could not open to friends', err)).finally(() => {
           if (this.session === session && this.screen.style.display !== 'none' && this.screen.querySelector('[data-a=resume]')) this.pauseMenu(session);
         });
       }
@@ -594,6 +654,10 @@ export class App {
         break;
       }
       case 'disconnected': {
+        if (!session.isHost && st.succession && st.succession.order.length > 0) {
+          void this.carryOn(session, st.succession);
+          break;
+        }
         const s = this.show(`
           <div class="panel">
             <h2>החיבור נותק</h2>

@@ -48,7 +48,15 @@ export type ClientStatus =
   | { kind: 'playing' }
   | { kind: 'paused' }
   | { kind: 'dead'; message: string }
-  | { kind: 'disconnected'; reason: string };
+  | { kind: 'disconnected'; reason: string; succession?: Succession };
+
+/** What the host last said about who carries the world on, plus this client's own player id. */
+export interface Succession {
+  worldId: string;
+  code: string;
+  order: Array<{ id: number; name: string }>;
+  me: number;
+}
 
 type UiState = 'loading' | 'playing' | 'paused' | 'window' | 'chat' | 'resuming' | 'dead' | 'disconnected';
 
@@ -79,6 +87,7 @@ export class GameClient implements InteractionHost, WindowHost {
   private readonly chatInput: ChatInput;
   private readonly playerList: PlayerListView;
   private playerId = 0;
+  private succession: Succession | null = null;
   private playerEntries: PlayerListEntry[] = [];
   private lastHostMessage = performance.now();
   /** The player's own window (2×2 crafting) and an open container, if any. */
@@ -488,7 +497,7 @@ export class GameClient implements InteractionHost, WindowHost {
     if (this.state === 'disconnected') return;
     this.state = 'disconnected';
     this.controls.unlock();
-    this.onStatus?.({ kind: 'disconnected', reason });
+    this.onStatus?.({ kind: 'disconnected', reason, succession: this.succession ?? undefined });
   }
 
   dispose(): void {
@@ -657,6 +666,9 @@ export class GameClient implements InteractionHost, WindowHost {
         break;
       case 'kick':
         this.disconnect(msg.reason);
+        break;
+      case 'succession':
+        this.succession = { worldId: msg.worldId, code: msg.code, order: msg.order, me: this.playerId };
         break;
       default:
         break;

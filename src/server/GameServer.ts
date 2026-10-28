@@ -40,6 +40,8 @@ export interface ServerOptions {
   verifyAccount?: (token: string) => Promise<{ uid: string } | null>;
   /** A player with a verified account joined (the world gets shared with them). */
   onAccountJoin?: (uid: string, name: string) => void;
+  /** The shared world's id and open invite code, when friends could carry it on without the host. */
+  succession?: () => { worldId: string; code: string } | null;
 }
 
 /** Chunks sent to one player per tick (keeps the channel and the client responsive). */
@@ -303,6 +305,17 @@ export class GameServer {
   private sendPlayerList(): void {
     const players = [...this.players.values()].filter((q) => q.joined).map((q) => ({ id: q.id, name: q.name, ping: Math.round(q.rtt), host: q.isHost, verified: !!q.account }));
     this.broadcast({ t: 'playerList', players });
+    const next = this.options.succession?.();
+    if (next) {
+      // Signed-in friends, in the order they joined, can host the world from the cloud.
+      const order = [...this.players.values()].filter((q) => q.joined && !q.isHost && q.account).map((q) => ({ id: q.id, name: q.name }));
+      this.broadcast({ t: 'succession', worldId: next.worldId, code: next.code, order });
+    }
+  }
+
+  /** Re-sends the player list and succession now (e.g. right after the world opened to friends). */
+  announcePlayers(): void {
+    this.sendPlayerList();
   }
 
   /** Disconnects a player with a reason shown to them. */

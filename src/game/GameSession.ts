@@ -39,6 +39,7 @@ export class GameSession {
   private stopped = false;
   private synced: SyncedStore | null = null;
   private opening: Promise<string> | null = null;
+  private stopping: Promise<void> | null = null;
 
   private constructor(server: GameServer | null, generator: WorkerChunkGenerator | null, client: GameClient, private readonly onLeave?: () => void) {
     this.server = server;
@@ -70,6 +71,8 @@ export class GameSession {
     client.start();
     const session = new GameSession(server, generator, client);
     session.synced = synced;
+    // Signed-in friends can carry a shared world on when this host leaves (see App.carryOn).
+    server.options.succession = () => (synced && session.network?.code && !session.stopped ? { worldId: meta.id, code: session.network.code } : null);
     // Claim the world right away, so others see it's being played.
     if (synced) void server.save();
     return session;
@@ -99,10 +102,10 @@ export class GameSession {
    * Starts accepting friends; resolves with the invite code. Each world keeps one code (saved with it),
    * so the same code and link work every time it is opened. `newCode` replaces it.
    */
-  openToFriends(newCode = false): Promise<string> {
+  openToFriends(newCode = false, patient = false): Promise<string> {
     // One opening at a time (the automatic one and a click must not race for the same code).
     if (this.opening && !newCode) return this.opening;
-    const run = this.openNow(newCode);
+    const run = this.openNow(newCode, patient);
     this.opening = run;
     const done = () => {
       if (this.opening === run) this.opening = null;
@@ -116,7 +119,8 @@ export class GameSession {
     return this.opening !== null;
   }
 
-  private async openNow(newCode: boolean): Promise<string> {
+  /** `patient`: taking over from a host that just left, whose page may hold the code for a while. */
+  private async openNow(newCode: boolean, patient: boolean): Promise<string> {
     const server = this.server;
     if (!server) throw new Error('only the host can open the world');
     if (newCode) {
@@ -128,8 +132,9 @@ export class GameSession {
     const network = this.network;
     server.meta.inviteCode ??= newInviteCode();
     try {
-      const code = await network.open(server.meta.inviteCode);
+      const code = await network.open(server.meta.inviteCode, patient);
       void server.save();
+      server.announcePlayers();
       return code;
     } catch (err) {
       if (this.network === network) this.network = null;
@@ -154,12 +159,21 @@ export class GameSession {
   }
 
   /** Saves (host) and tears everything down. */
-  async stop(): Promise<void> {
-    if (this.stopped) return;
+  stop(): Promise<void> {
+    this.stopping ??= this.shutDown();
+    return this.stopping;
+  }
+
+  private async shutDown(): Promise<void> {
+    // A shared world reaches the cloud before friends are let go, so whoever carries it on has it all.
+    if (this.server && this.synced) {
+      await this.server.save();
+      await this.synced.flush(true);
+    }
     this.stopped = true;
-    this.network?.close();
     this.client.dispose();
     await this.server?.stop();
+    this.network?.close();
     await this.synced?.flush(true);
     this.generator?.terminate();
     this.onLeave?.();

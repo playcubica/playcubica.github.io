@@ -11,6 +11,8 @@ const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const JOIN_TIMEOUT_MS = 20_000;
 /** A world's fixed code can still be held for a moment by the page that had it before (reload). */
 const CODE_RETRIES = 6;
+/** Taking over from a host whose page closed: the signalling server may keep its id for up to a minute. */
+const PATIENT_RETRIES = 25;
 
 /** Free public STUN servers (they only help each side discover its public address). */
 const RTC_CONFIG: RTCConfiguration = {
@@ -117,7 +119,7 @@ export class HostNetwork {
    * Starts listening; resolves with the invite code. With `code` (the world's saved code) it keeps that
    * code: if it is still held (the previous page is just going away) it waits and tries again.
    */
-  async open(code?: string): Promise<string> {
+  async open(code?: string, patient = false): Promise<string> {
     if (this.peer) return this.code;
     const PeerClass = await loadPeer();
     const fixed = code ?? null;
@@ -130,7 +132,7 @@ export class HostNetwork {
       } catch (err) {
         const taken = (err as PeerError<string>).type === 'unavailable-id';
         if (taken && !fixed && attempt < 3) continue;
-        if (taken && fixed && attempt < CODE_RETRIES) {
+        if (taken && fixed && attempt < (patient ? PATIENT_RETRIES : CODE_RETRIES)) {
           await new Promise((r) => setTimeout(r, this.retryDelayMs));
           continue;
         }

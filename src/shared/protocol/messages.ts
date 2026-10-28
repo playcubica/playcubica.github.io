@@ -131,7 +131,12 @@ export type ServerMsg =
   | { t: 'playerLeave'; id: number }
   | { t: 'playerList'; players: PlayerListEntry[] }
   | { t: 'ping'; id: number }
-  | { t: 'kick'; reason: string };
+  | { t: 'kick'; reason: string }
+  /**
+   * Who carries the world on if the host leaves: a shared (cloud) world, its fixed invite code, and the
+   * signed-in players in the order they take over. Sent with every player list.
+   */
+  | { t: 'succession'; worldId: string; code: string; order: Array<{ id: number; name: string }> };
 
 export type EntityInfo =
   | { id: number; kind: 'item'; x: number; y: number; z: number; item: ItemStack }

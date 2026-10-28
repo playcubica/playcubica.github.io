@@ -340,6 +340,13 @@ before the user has approved the current one.**
   show "🟢 X plays now" with a join button instead of a second copy being hosted. Shared worlds open to
   friends automatically. Non-owners "remove" (leave) instead of delete. Old personal saves under
   `users/{uid}/worlds` are still listed and move to `worlds/` on their next save.
+- **Handover when the host leaves** (shared worlds only): with every player list the host sends
+  `succession` (world id, open code, signed-in non-host players in join order). Leaving a shared world saves
+  and flushes to the cloud (releasing the lock) *before* friends are disconnected. A client that loses its
+  host (leave, or the 20 s watchdog after a crash) with a non-empty succession runs `App.carryOn`: the first
+  in order downloads the world and hosts it (`play(..., { patient })` → `HostNetwork.open(code, patient)`
+  waits up to ~75 s for the old page's peer id), everyone else retries joining the same code for about a
+  minute. Guests reconnect but can't take over (they aren't members).
   IndexedDB stays the working copy. `SyncedStore` wraps the local ChunkStore: first push of a session uploads
   every saved chunk, then only changed ones, at most once a minute (on `saveMeta`), on tab hide and on exit.
   The load menu merges local and cloud lists; a newer (or cloud-only) copy is downloaded into IndexedDB

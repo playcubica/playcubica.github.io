@@ -214,11 +214,13 @@ describe('accounts on the host', () => {
   it('keys signed-in players by account, rejects a second login, and falls back to guest', async () => {
     const meta = newWorldMeta('acc', 1, GameMode.SURVIVAL);
     const shared: string[] = [];
+    let open = false;
     const server = new GameServer({
       viewDistance: 2,
       meta,
       verifyAccount: async (t) => (t.startsWith('good:') ? { uid: t.slice(5) } : null),
       onAccountJoin: (uid, name) => shared.push(`${uid}:${name}`),
+      succession: () => (open ? { worldId: meta.id, code: 'ABCD-2345' } : null),
     }, flatGen);
     // Progress made earlier as a guest named Noa.
     meta.players.Noa = { pos: [3, 10, 3], yaw: 0, pitch: 0, flying: false, gameMode: GameMode.CREATIVE, inventory: { slots: [], held: 0 } as never };
@@ -247,6 +249,14 @@ describe('accounts on the host', () => {
     const forged = await join('Dan', 'bad-token');
     expect(forged.got.some((m) => m.t === 'welcome')).toBe(true);
     expect(forged.got.some((m) => m.t === 'chat' && m.text.includes('אורח'))).toBe(true);
+
+    // Once the world is open to friends, everyone learns who carries it on: signed-in players only.
+    open = true;
+    server.announcePlayers();
+    await flush();
+    const last = [...forged.got].reverse().find((m) => m.t === 'succession');
+    expect(last && last.t === 'succession' && last.order.map((o) => o.name)).toEqual(['Noa']);
+    expect(last && last.t === 'succession' && last.code).toBe('ABCD-2345');
 
     await server.save();
     noa.close();
