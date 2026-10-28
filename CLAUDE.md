@@ -301,7 +301,18 @@ before the user has approved the current one.**
 6. ✅ **Extensions**: our own signal/power system, an original dimension with its own portal ritual, rune
    upgrades, farming, settlements with traders, Web Audio sounds and music, settings screen (view distance,
    FOV, sensitivity).
-7. ⏳ **Publishing**: GitHub Actions → GitHub Pages on every push, with a permanent link.
+7. ✅ **Publishing**: GitHub Actions → GitHub Pages on every push, with a permanent link.
+
+### Publishing (stage 7)
+- Live: **https://idoszmail-crypto.github.io/cubica/**. Repo: https://github.com/idoszmail-crypto/cubica
+  (public; Pages source = "GitHub Actions").
+- `.github/workflows/deploy.yml`: on every push to `main` → `npm ci`, `npm test`, `npm run build`, upload
+  `dist/`, `deploy-pages`. A failing test blocks the deploy. `gh run list -R idoszmail-crypto/cubica` shows runs.
+- `gh` is installed locally at `~/.local/gh/bin/gh` (logged in as idoszmail-crypto with the `workflow` scope;
+  pushing files under `.github/workflows` needs that scope).
+- `base: './'` keeps the build path-agnostic. Check a production build under a sub-path with the
+  `cubica-dist` preview config (`vite preview --base /cubica/`, port 4173).
+- Invite links use the page's own URL, so `?join=CODE` links point at the live site when the host plays there.
 
 ### Stage 1 notes
 - Per-chunk performance (M-series, Node): generation ~1.6 ms, lighting ~1.2 ms, meshing ~4.7 ms. 60 FPS at

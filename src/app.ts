@@ -118,7 +118,7 @@ export class App {
         <button class="btn" data-a="join">הצטרף לחבר</button>
         <button class="btn" data-a="settings">הגדרות</button>
         ${this.storage ? '' : '<p class="warn">הדפדפן לא מאפשר שמירה (IndexedDB). אפשר לשחק, אבל העולם לא יישמר.</p>'}
-        <p class="small">גרסה 0.6 · שלב 6</p>
+        <p class="small">גרסה 1.0</p>
       </div>`, { menu: true });
     const nameInput = el<HTMLInputElement>(s, '[data-f=pname]');
     const nameOk = (): boolean => {

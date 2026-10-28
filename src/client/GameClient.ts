@@ -730,7 +730,7 @@ export class GameClient implements InteractionHost, WindowHost {
     const tg = this.interaction.target;
     const state = [b.onGround && 'ground', b.inWater && 'water', b.flying && 'flying', b.sneaking && 'sneak', b.sprinting && 'sprint'].filter(Boolean).join(' ');
     this.debug.set([
-      'Cubica 0.6 (stage 6)',
+      'Cubica 1.0',
       `${this.fps} fps  (cpu ${this.frameMs.toFixed(1)} ms)  draws ${info.calls}  tris ${Math.round(info.triangles / 1000)}k`,
       `XYZ ${b.x.toFixed(2)} / ${b.y.toFixed(2)} / ${b.z.toFixed(2)}  ${state}`,
       `Chunk ${bx >> 4} ${bz >> 4}  facing ${facing}`,
