@@ -718,3 +718,21 @@ body {
 .small a {
   color: #9fd3ff;
 }
+
+/* Game controller: focused menu item and the inventory pointer */
+.pad-focus {
+  outline: 3px solid #ffd166;
+  outline-offset: 2px;
+}
+
+.pad-pointer {
+  position: fixed;
+  z-index: 1000;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}

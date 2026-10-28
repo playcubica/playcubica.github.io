@@ -1,5 +1,6 @@
 import type { ClientStatus } from './client/GameClient';
 import { Account } from './cloud/account';
+import { gamepad, Pad, type PadFrame } from './client/input/Gamepad';
 import { FirestoreWorlds, type CloudBackend, type CloudWorldInfo } from './cloud/cloudWorlds';
 import { GameSession } from './game/GameSession';
 import { inviteLink, joinHost, normalizeInviteCode } from './net/peerNetwork';
@@ -28,6 +29,23 @@ const CONTROLS_HELP = `
     <tr><td>F3</td><td>מידע דיבאג</td></tr>
     <tr><td>Esc</td><td>השהיה</td></tr>
   </table>`;
+
+const PAD_HELP = `
+  <table class="keys">
+    <tr><td>סטיק שמאלי</td><td>תנועה · לחיצה: ריצה</td></tr>
+    <tr><td>סטיק ימני</td><td>הסתכלות</td></tr>
+    <tr><td>A / ✕</td><td>קפיצה · פעמיים: טיסה (יצירתי)</td></tr>
+    <tr><td>B / ○</td><td>התכופפות</td></tr>
+    <tr><td>RT / R2</td><td>כרייה · תקיפה (החזיקו)</td></tr>
+    <tr><td>LT / L2</td><td>הנחת בלוק · שימוש · אכילה</td></tr>
+    <tr><td>LB RB / L1 R1</td><td>בחירה בסרגל</td></tr>
+    <tr><td>Y / △</td><td>מלאי ויצירה</td></tr>
+    <tr><td>X / □</td><td>זריקת פריט</td></tr>
+    <tr><td>חץ למעלה</td><td>בחירת בלוק (יצירתי)</td></tr>
+    <tr><td>View / Share</td><td>רשימת שחקנים</td></tr>
+    <tr><td>Menu / Options</td><td>השהיה</td></tr>
+  </table>
+  <p class="small">במלאי: הסטיק מזיז סמן, A לוקח/מניח, X חצי ערימה, RB העברה מהירה, B סגירה.</p>`;
 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
@@ -80,6 +98,8 @@ export class App {
   private readonly account = new Account();
   private cloudBackend: { uid: string; backend: Promise<CloudBackend> } | null = null;
   private onMainMenu = false;
+  /** Index of the menu item the controller points at (-1 = none yet). */
+  private padIndex = -1;
   /** Bumped on every screen change, so delayed refreshes know if their screen is still shown. */
   private screenToken = 0;
 
@@ -117,6 +137,11 @@ export class App {
       if (this.onMainMenu) this.mainMenu();
     };
     this.account.restore();
+    gamepad.start();
+    gamepad.onConnectChange = () => {
+      if (this.onMainMenu) this.mainMenu();
+    };
+    gamepad.listen((f) => this.padMenu(f));
     const join = new URLSearchParams(location.search).get('join');
     if (join) this.joinMenu(join);
     else this.mainMenu();
@@ -160,10 +185,44 @@ export class App {
   private show(html: string, opts: { menu?: boolean } = {}): HTMLDivElement {
     this.screenToken++;
     this.onMainMenu = false;
+    this.padIndex = gamepad.active ? 0 : -1;
     this.screen.innerHTML = html;
     this.screen.style.display = '';
     this.screen.classList.toggle('menu-bg', !!opts.menu);
     return this.screen;
+  }
+
+  /** Controller in menus: up/down picks a button, A presses it, left/right moves sliders, B goes back. */
+  private padMenu(f: PadFrame): void {
+    if (this.screen.style.display === 'none') return;
+    const items = [...this.screen.querySelectorAll<HTMLElement>('button:not(:disabled), input[type=range], label.btn')].filter((e) => e.offsetParent !== null);
+    for (const e of this.screen.querySelectorAll('.pad-focus')) e.classList.remove('pad-focus');
+    if (items.length === 0) return;
+    const firstTouch = this.padIndex < 0 && (f.nav.y !== 0 || f.pressed(Pad.A));
+    if (firstTouch) this.padIndex = 0;
+    else if (f.nav.y) this.padIndex = (this.padIndex + f.nav.y + items.length) % items.length;
+    if (this.padIndex < 0) return;
+    this.padIndex = Math.min(this.padIndex, items.length - 1);
+    const el = items[this.padIndex];
+    el.classList.add('pad-focus');
+    if (f.nav.y) el.scrollIntoView({ block: 'nearest' });
+    if (el instanceof HTMLInputElement && el.type === 'range' && f.nav.x) {
+      if (f.nav.x > 0) el.stepUp();
+      else el.stepDown();
+      el.dispatchEvent(new Event('input'));
+    }
+    if (f.pressed(Pad.A) && !firstTouch) {
+      this.audioClick();
+      el.click();
+    } else if (f.pressed(Pad.B)) {
+      this.screen.querySelector<HTMLElement>('[data-a=back], [data-a=resume]')?.click();
+    } else if (f.pressed(Pad.START)) {
+      this.screen.querySelector<HTMLElement>('[data-a=resume], [data-a=respawn]')?.click();
+    }
+  }
+
+  private audioClick(): void {
+    this.session?.client.audio.play('click');
   }
 
   private hide(): void {
@@ -186,6 +245,7 @@ export class App {
         <button class="btn" data-a="load">טען עולם</button>
         <button class="btn" data-a="join">הצטרף לחבר</button>
         <button class="btn" data-a="settings">הגדרות</button>
+        <p class="small">${gamepad.connectedName ? `🎮 ${esc(gamepad.connectedName)} מחובר — חיצים לבחירה, A לאישור, B לחזרה` : '🎮 אפשר לשחק גם עם שלט (Bluetooth או USB) — חברו אותו למחשב ולחצו על כפתור בשלט'}</p>
         ${this.storage ? '' : '<p class="warn">הדפדפן לא מאפשר שמירה (IndexedDB). אפשר לשחק, אבל העולם לא יישמר.</p>'}
         <p class="small">גרסה 1.0</p>
       </div>`, { menu: true });
@@ -532,7 +592,7 @@ export class App {
         ${c.hosting ? `<button class="btn" data-a="mode">מצב משחק: ${c.creative ? 'יצירתי' : 'הישרדות'}</button>` : ''}
         <button class="btn" data-a="settings">הגדרות</button>
         <button class="btn" data-a="quit">${server ? 'שמור וצא לתפריט' : 'התנתק'}</button>
-        ${CONTROLS_HELP}
+        ${gamepad.connectedName ? PAD_HELP : CONTROLS_HELP}
       </div>`);
     el(s, '[data-a=resume]').onclick = () => c.resume();
     el(s, '[data-a=settings]').onclick = () => this.settingsMenu(() => this.session === session && this.pauseMenu(session));

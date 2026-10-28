@@ -55,11 +55,11 @@ export class LocalPlayer {
 
     const c = this.controls;
     const input: MoveInput = {
-      forward: (c.isDown(KEYS.forward) ? 1 : 0) - (c.isDown(KEYS.back) ? 1 : 0),
-      strafe: (c.isDown(KEYS.right) ? 1 : 0) - (c.isDown(KEYS.left) ? 1 : 0),
+      forward: Math.max(-1, Math.min(1, (c.isDown(KEYS.forward) ? 1 : 0) - (c.isDown(KEYS.back) ? 1 : 0) + c.padMove.forward)),
+      strafe: Math.max(-1, Math.min(1, (c.isDown(KEYS.right) ? 1 : 0) - (c.isDown(KEYS.left) ? 1 : 0) + c.padMove.strafe)),
       jump: c.isDown(KEYS.jump),
       sneak: c.isDown(KEYS.sneak),
-      sprint: this.canSprint && (c.isDown(KEYS.sprint) || (b.sprinting && c.isDown(KEYS.forward))),
+      sprint: this.canSprint && (c.isDown(KEYS.sprint) || (b.sprinting && (c.isDown(KEYS.forward) || c.padMove.forward > 0.3))),
       yaw: c.yaw,
     };
     this.acc = Math.min(this.acc + dt, 0.25);

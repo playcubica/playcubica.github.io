@@ -1,5 +1,8 @@
+import { gamepad } from './Gamepad';
+
 // Keyboard + mouse input with Pointer Lock. Key bindings follow the usual
 // block-sandbox PC layout (KeyboardEvent.code, so they work on any keyboard language).
+// A game controller feeds the same keys/buttons (see GameClient.padFrame), plus analog movement.
 
 export const KEYS = {
   forward: 'KeyW',
@@ -33,6 +36,11 @@ export class Controls {
   onWheel: ((steps: number) => void) | null = null;
   private readonly down = new Set<string>();
   private readonly buttons = new Set<number>();
+  /** Keys and mouse buttons held on the controller (kept apart so a mouse-up can't release them). */
+  private readonly padDown = new Set<string>();
+  private readonly padButtons = new Set<number>();
+  /** Analog movement from the controller's left stick (forward / strafe, −1..1). */
+  padMove = { forward: 0, strafe: 0 };
   private readonly abort = new AbortController();
 
   constructor(private readonly element: HTMLElement) {
@@ -82,6 +90,11 @@ export class Controls {
   /** Captures the mouse for the game; if the browser refuses, plays on with a free mouse. */
   lock(): void {
     if (this.locked) return;
+    // Playing with a controller: the mouse isn't needed (and a pad press can't grab it anyway).
+    if (gamepad.active) {
+      this.fallBack();
+      return;
+    }
     if (typeof this.element.requestPointerLock !== 'function') {
       this.fallBack();
       return;
@@ -124,6 +137,7 @@ export class Controls {
     if (!v) {
       this.down.clear();
       this.buttons.clear();
+      this.clearPad();
     }
     this.onLockChange?.(v);
   }
@@ -142,11 +156,47 @@ export class Controls {
   }
 
   isDown(code: string): boolean {
-    return this.down.has(code);
+    return this.down.has(code) || this.padDown.has(code);
   }
 
   isButtonDown(button: number): boolean {
-    return this.buttons.has(button);
+    return this.buttons.has(button) || this.padButtons.has(button);
+  }
+
+  /** Controller: holds or releases a key; pressing also fires onKeyPress like a real key. */
+  padKey(code: string, held: boolean): void {
+    if (held === this.padDown.has(code)) return;
+    if (held) {
+      this.padDown.add(code);
+      this.onKeyPress?.(code, new KeyboardEvent('keydown', { code }));
+    } else {
+      this.padDown.delete(code);
+      this.onKeyRelease?.(code);
+    }
+  }
+
+  /** Controller: holds or releases a mouse button; pressing fires onMouseDown like a click. */
+  padButton(button: number, held: boolean): void {
+    if (held === this.padButtons.has(button)) return;
+    if (held) {
+      this.padButtons.add(button);
+      this.onMouseDown?.(button);
+    } else {
+      this.padButtons.delete(button);
+    }
+  }
+
+  /** Controller: turns the view (radians). */
+  padLook(dYaw: number, dPitch: number): void {
+    this.yaw += dYaw;
+    this.pitch += dPitch;
+    this.clampPitch();
+  }
+
+  clearPad(): void {
+    this.padDown.clear();
+    this.padButtons.clear();
+    this.padMove = { forward: 0, strafe: 0 };
   }
 
   dispose(): void {

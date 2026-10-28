@@ -14,7 +14,8 @@ import { ChunkMeshManager } from './render/ChunkMeshManager';
 import { createChunkMaterials, createChunkUniforms, type ChunkUniforms } from './render/chunkMaterial';
 import { Sky } from './render/sky';
 import { buildBlockTextures } from './textures/atlas';
-import { Controls, KEYS } from './input/Controls';
+import { Controls, KEYS, MouseButton } from './input/Controls';
+import { gamepad, Pad, type PadFrame } from './input/Gamepad';
 import { DebugOverlay } from './ui/debugOverlay';
 import { LocalPlayer } from './player/LocalPlayer';
 import { BlockInteraction, type InteractionHost } from './interaction/BlockInteraction';
@@ -123,6 +124,15 @@ export class GameClient implements InteractionHost, WindowHost {
   private rafId = 0;
   private disposed = false;
   private readonly dir = new THREE.Vector3();
+  /** Controller: sprint stays on (L3) until the stick is let go. */
+  private padSprint = false;
+  /** Whether the previous controller frame was in play (a press that just left a menu is not reused). */
+  private padWasPlaying = false;
+  private padName: string | null = null;
+  /** Controller pointer for inventory windows (a virtual mouse). */
+  private readonly padPointer: HTMLDivElement;
+  private padPos = { x: 0, y: 0 };
+  private readonly unlistenPad: () => void;
 
   constructor(container: HTMLElement, private readonly transport: Transport<ClientMsg, ServerMsg>, private readonly options: ClientOptions) {
     this.settings = options.settings ?? loadSettings();
@@ -162,6 +172,11 @@ export class GameClient implements InteractionHost, WindowHost {
     };
     this.controls.onWheel = (steps) => this.selectSlot((this.inventory.selected + steps + HOTBAR_SIZE) % HOTBAR_SIZE);
     this.controls.onLockChange = (locked) => this.lockChanged(locked);
+    this.padPointer = document.createElement('div');
+    this.padPointer.className = 'pad-pointer';
+    this.padPointer.style.display = 'none';
+    container.appendChild(this.padPointer);
+    this.unlistenPad = gamepad.listen((f) => this.padFrame(f));
 
 
     transport.onMessage = (msg) => {
@@ -302,7 +317,7 @@ export class GameClient implements InteractionHost, WindowHost {
   private freeMouseHinted = false;
 
   private lockChanged(locked: boolean): void {
-    if (locked && this.controls.freeMouse && !this.freeMouseHinted) {
+    if (locked && this.controls.freeMouse && !this.freeMouseHinted && !gamepad.active) {
       this.freeMouseHinted = true;
       this.hud.message('הדפדפן לא מאפשר לתפוס את העכבר — משחקים במצב עכבר חופשי: הזיזו את העכבר (או החיצים) כדי להסתכל, Esc להשהיה.', true);
     }
@@ -343,6 +358,86 @@ export class GameClient implements InteractionHost, WindowHost {
     const digit = /^Digit([1-9])$/.exec(code);
     if (digit) this.selectSlot(Number(digit[1]) - 1);
     this.player.keyPressed(code);
+  }
+
+  // --- Game controller ---------------------------------------------------------
+
+  /** Maps a controller frame onto the same actions as keyboard and mouse. */
+  private padFrame(f: PadFrame): void {
+    if (this.padName !== gamepad.connectedName) {
+      this.padName = gamepad.connectedName;
+      if (this.padName) this.hud.message(`🎮 שלט מחובר: ${this.padName}`);
+    }
+    const c = this.controls;
+    if (this.state === 'window') {
+      c.clearPad();
+      this.padWasPlaying = false;
+      this.padWindow(f);
+      return;
+    }
+    this.padPointer.style.display = 'none';
+    const wasPlaying = this.padWasPlaying;
+    this.padWasPlaying = this.state === 'playing';
+    if (this.state !== 'playing' || !wasPlaying) {
+      c.clearPad();
+      return;
+    }
+    const [lx, ly] = f.left;
+    c.padMove = { forward: -ly, strafe: lx };
+    if (f.pressed(Pad.L3)) this.padSprint = !this.padSprint;
+    if (Math.hypot(lx, ly) < 0.2) this.padSprint = false;
+    c.padKey(KEYS.sprint, this.padSprint);
+    c.padKey(KEYS.jump, f.held(Pad.A));
+    c.padKey(KEYS.sneak, f.held(Pad.B));
+    c.padKey(KEYS.playerList, f.held(Pad.BACK));
+    c.padButton(MouseButton.LEFT, f.held(Pad.RT));
+    c.padButton(MouseButton.RIGHT, f.held(Pad.LT));
+    c.padButton(MouseButton.MIDDLE, f.held(Pad.UP));
+    // Quadratic response: small tilts aim finely, full tilt turns fast.
+    const [rx, ry] = f.right;
+    const speed = 3.2 * this.settings.sensitivity * f.dt;
+    c.padLook(-Math.sign(rx) * rx * rx * speed, -Math.sign(ry) * ry * ry * speed * 0.75);
+    if (f.pressed(Pad.LB) || f.pressed(Pad.LEFT)) c.onWheel?.(-1);
+    if (f.pressed(Pad.RB) || f.pressed(Pad.RIGHT)) c.onWheel?.(1);
+    if (f.pressed(Pad.X)) this.keyPressed('KeyQ');
+    if (f.pressed(Pad.Y)) this.keyPressed(KEYS.inventory);
+    if (f.pressed(Pad.START)) c.unlock();
+  }
+
+  /** Inventory/trade windows: the left stick moves a pointer that clicks like a mouse. */
+  private padWindow(f: PadFrame): void {
+    const p = this.padPointer;
+    if (p.style.display === 'none') {
+      this.padPos = { x: innerWidth / 2, y: innerHeight / 2 };
+      p.style.display = '';
+    }
+    const [lx, ly] = f.left;
+    const speed = 1100 * f.dt;
+    const moved = lx !== 0 || ly !== 0 || f.nav.x !== 0 || f.nav.y !== 0;
+    this.padPos.x = Math.max(0, Math.min(innerWidth - 1, this.padPos.x + Math.sign(lx) * lx * lx * speed));
+    this.padPos.y = Math.max(0, Math.min(innerHeight - 1, this.padPos.y + Math.sign(ly) * ly * ly * speed));
+    // The D-pad steps one slot (44 px + gap) at a time for precise placing.
+    if (!lx && !ly) {
+      this.padPos.x = Math.max(0, Math.min(innerWidth - 1, this.padPos.x + f.nav.x * 46));
+      this.padPos.y = Math.max(0, Math.min(innerHeight - 1, this.padPos.y + f.nav.y * 46));
+    }
+    const { x, y } = this.padPos;
+    p.style.left = `${x}px`;
+    p.style.top = `${y}px`;
+    const target = document.elementFromPoint(x, y);
+    const fire = (type: string, button = 0, shiftKey = false) =>
+      target?.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button, shiftKey }));
+    if (moved) fire('mousemove');
+    const click = (button: number, shift = false) => {
+      fire('mousedown', button, shift);
+      fire('mouseup', button, shift);
+      if (button === 0) fire('click', 0, shift);
+      fire('mousemove'); // refresh the held stack and tooltip
+    };
+    if (f.pressed(Pad.A)) click(0);
+    else if (f.pressed(Pad.X)) click(2);
+    else if (f.pressed(Pad.RB) || f.pressed(Pad.LB)) click(0, true);
+    else if (f.pressed(Pad.Y) || f.pressed(Pad.B) || f.pressed(Pad.START)) this.keyPressed(KEYS.inventory);
   }
 
   private openWindowScreen(): void {
@@ -397,6 +492,8 @@ export class GameClient implements InteractionHost, WindowHost {
     this.disposed = true;
     cancelAnimationFrame(this.rafId);
     this.controls.dispose();
+    this.unlistenPad();
+    this.padPointer.remove();
     this.interaction.dispose();
     this.meshes.dispose();
     this.hud.dispose();

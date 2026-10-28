@@ -335,6 +335,25 @@ before the user has approved the current one.**
 - Free tier limits (Spark): Firestore 50k reads / 20k writes per day; a push is (changed chunks + 1) writes.
 - The built-in browser blocks the sign-in popup for automated clicks; real logins need the user.
 
+### Game controllers
+- `client/input/Gamepad.ts`: one `gamepad` (Gamepad API, standard mapping) polled in its own rAF loop;
+  listeners get a `PadFrame` (held/pressed/released, sticks with radial deadzone, `nav` with key repeat).
+  Bluetooth/USB controllers paired with the OS appear after a button press on the page. `gamepad.active`
+  = used in the last 2 s; `Controls.lock()` then skips Pointer Lock (a pad press is no user gesture) and
+  goes straight to free-mouse mode without the mouse hint.
+- In play (`GameClient.padFrame`) the pad drives the same paths as keyboard/mouse via
+  `Controls.padKey/padButton/padLook/padMove` (kept in separate sets so a real mouse-up can't release them):
+  LS move (analog, L3 toggles sprint), RS look (quadratic), A jump, B sneak, RT mine/attack, LT place/use,
+  LB/RB and D-pad ←/→ hotbar, Y inventory, X drop, D-pad ↑ pick block, View list, Menu pause.
+  The first frame after leaving a menu is ignored so the press that resumed doesn't pause again.
+- In windows (`padWindow`) the left stick (or D-pad, one slot per step) moves `.pad-pointer`, which
+  dispatches mousemove/mousedown/click at that point: A click, X right-click, RB/LB shift-click, B/Y close.
+- Menus (`App.padMenu`): up/down moves `.pad-focus` over visible buttons/sliders/file labels, A clicks,
+  left/right steps sliders, B = back/resume, Menu = resume/respawn. The pause menu shows the controller
+  layout instead of the keyboard one while a controller is connected.
+- Testing without hardware: override `navigator.getGamepads` with a fake standard pad and call
+  `gamepad.poll(performance.now())` (import `/src/client/input/Gamepad.ts` in the dev page).
+
 ### Stage 1 notes
 - Per-chunk performance (M-series, Node): generation ~1.6 ms, lighting ~1.2 ms, meshing ~4.7 ms. 60 FPS at
   view distance 8 (~300 chunks, ~100–200 draw calls).
