@@ -1,17 +1,18 @@
 /** F3 overlay: performance and world info. */
 export class DebugOverlay {
   readonly el: HTMLDivElement;
-  visible = true;
+  visible = false;
 
-  constructor(parent: HTMLElement) {
+  constructor(parent: HTMLElement, visible: boolean) {
     this.el = document.createElement('div');
     this.el.className = 'debug-overlay';
     parent.appendChild(this.el);
+    this.show(visible);
   }
 
-  toggle(): void {
-    this.visible = !this.visible;
-    this.el.style.display = this.visible ? '' : 'none';
+  show(visible: boolean): void {
+    this.visible = visible;
+    this.el.style.display = visible ? '' : 'none';
   }
 
   set(lines: string[]): void {

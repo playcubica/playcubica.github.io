@@ -174,7 +174,8 @@ from client-reported positions (bounded by the speed check).
   echo of them is skipped (`predicted` map). Generative pentatonic pieces every few minutes; mood = day /
   night / deep. Audio unlocks on the "resume" click.
 - **Settings** (`client/settings.ts`, localStorage `cubica.settings`): view distance 2–12 (per player on
-  the host via `settings` message), FOV, mouse sensitivity, sound and music volume. From the main menu and
+  the host via `settings` message), FOV, mouse sensitivity, sound and music volume. Plus `showDebug`
+  (the F3 panel; hidden by default, F3 flips and saves it). From the main menu and
   the pause menu; applied live.
 
 ### Creatures (stage 5)

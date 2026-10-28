@@ -11,10 +11,12 @@ export interface Settings {
   sound: number;
   /** 0..1 */
   music: number;
+  /** The F3 info panel (fps, coordinates…). */
+  showDebug: boolean;
 }
 
 const KEY = 'cubica.settings';
-export const DEFAULT_SETTINGS: Settings = { viewDistance: 8, fov: 70, sensitivity: 1, sound: 0.8, music: 0.5 };
+export const DEFAULT_SETTINGS: Settings = { viewDistance: 8, fov: 70, sensitivity: 1, sound: 0.8, music: 0.5, showDebug: false };
 
 const clamp = (v: unknown, lo: number, hi: number, def: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
 
@@ -32,6 +34,7 @@ export function loadSettings(): Settings {
     sensitivity: clamp(raw.sensitivity, 0.2, 3, d.sensitivity),
     sound: clamp(raw.sound, 0, 1, d.sound),
     music: clamp(raw.music, 0, 1, d.music),
+    showDebug: typeof raw.showDebug === 'boolean' ? raw.showDebug : d.showDebug,
   };
 }
 

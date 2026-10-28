@@ -47,6 +47,8 @@ const PAD_HELP = `
   </table>
   <p class="small">במלאי: הסטיק מזיז סמן, A לוקח/מניח, X חצי ערימה, RB העברה מהירה, B סגירה.</p>`;
 
+const debugLabel = (on: boolean) => `מידע טכני על המסך (F3): ${on ? 'מוצג' : 'מוסתר'}`;
+
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 }
@@ -639,8 +641,10 @@ export class App {
   }
 
   private settingsMenu(back: () => void): void {
+    // F3 in the game changes showDebug on its own; pick that up.
+    this.settings = { ...this.settings, showDebug: loadSettings().showDebug };
     const st = this.settings;
-    const rows: Array<[keyof Settings, string, number, number, number, (v: number) => string]> = [
+    const rows: Array<[Exclude<keyof Settings, 'showDebug'>, string, number, number, number, (v: number) => string]> = [
       ['viewDistance', 'מרחק ראייה (צ׳אנקים)', 2, 12, 1, (v) => String(v)],
       ['fov', 'שדה ראייה (FOV)', 50, 110, 1, (v) => `${v}°`],
       ['sensitivity', 'רגישות עכבר', 0.2, 3, 0.1, (v) => v.toFixed(1)],
@@ -656,6 +660,7 @@ export class App {
             <input type="range" data-k="${k}" min="${min}" max="${max}" step="${step}" value="${st[k]}" dir="ltr">
             <span data-v="${k}">${fmt(st[k])}</span>
           </div>`).join('')}
+        <button class="btn" data-a="debug">${debugLabel(st.showDebug)}</button>
         <p class="small">מרחק ראייה גדול יותר דורש מחשב חזק יותר. ההגדרות נשמרות בדפדפן הזה.</p>
         <button class="btn primary" data-a="back">חזרה</button>
       </div>`, { menu: !this.session });
@@ -668,6 +673,13 @@ export class App {
         this.session?.client.applySettings(this.settings);
       };
     }
+    const debug = el<HTMLButtonElement>(s, '[data-a=debug]');
+    debug.onclick = () => {
+      this.settings = { ...this.settings, showDebug: !this.settings.showDebug };
+      debug.textContent = debugLabel(this.settings.showDebug);
+      saveSettings(this.settings);
+      this.session?.client.applySettings(this.settings);
+    };
     el(s, '[data-a=back]').onclick = back;
   }
 

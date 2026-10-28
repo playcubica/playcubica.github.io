@@ -26,7 +26,7 @@ import { EntityRenderer } from './render/EntityRenderer';
 import { PlayerModels } from './render/PlayerModels';
 import { MobRenderer } from './render/MobRenderer';
 import { AudioEngine, materialOf } from './audio/AudioEngine';
-import { loadSettings, type Settings } from './settings';
+import { loadSettings, saveSettings, type Settings } from './settings';
 import { TradeScreen } from './ui/TradeScreen';
 import { isDeep } from '../shared/world/dimensions';
 import { B } from '../shared/blocks/registry';
@@ -164,7 +164,7 @@ export class GameClient implements InteractionHost, WindowHost {
       this.controls.lock();
     };
     this.playerList = new PlayerListView(container);
-    this.debug = new DebugOverlay(container);
+    this.debug = new DebugOverlay(container, this.settings.showDebug);
 
     this.controls.onKeyPress = (code) => this.keyPressed(code);
     this.controls.onKeyRelease = (code) => {
@@ -234,6 +234,7 @@ export class GameClient implements InteractionHost, WindowHost {
     this.baseFov = s.fov;
     this.controls.sensitivity = 0.0022 * s.sensitivity;
     this.audio.setVolumes(s.sound, s.music);
+    this.debug.show(s.showDebug);
     if (s.viewDistance !== this.viewDistance) {
       this.viewDistance = s.viewDistance;
       this.send({ t: 'settings', viewDistance: s.viewDistance });
@@ -329,7 +330,11 @@ export class GameClient implements InteractionHost, WindowHost {
   }
 
   private keyPressed(code: string): void {
-    if (code === KEYS.debug) this.debug.toggle();
+    if (code === KEYS.debug) {
+      this.settings = { ...this.settings, showDebug: !this.settings.showDebug };
+      saveSettings(this.settings);
+      this.debug.show(this.settings.showDebug);
+    }
     if (code === KEYS.playerList && this.state !== 'chat') {
       this.playerList.set(this.playerEntries, this.playerId);
       this.playerList.show(true);
