@@ -37,6 +37,8 @@ export interface WorldMeta {
   lastPlayed: number;
   time: number;
   players: Record<string, PlayerSave>;
+  /** The world's own invite code, kept so friends can reuse the same code/link every time. */
+  inviteCode?: string;
 }
 
 /** Minimal persistence interface the server needs (lets tests run without IndexedDB). */

@@ -207,6 +207,11 @@ from client-reported positions (bounded by the speed check).
   frames with `setInterval(() => client.frame(performance.now()), 16)` during browser checks.
 
 ### Multiplayer (stage 4)
+- Each world keeps one invite code (`WorldMeta.inviteCode`, made the first time it's opened and saved with
+  the world), so the code and link stay the same every time. `HostNetwork.open(code)` waits and retries
+  (6 × 3 s) while the id is still held by a page that just closed; if it stays taken (the same world open
+  elsewhere) the error says so and the pause menu offers "קוד חדש" (`openToFriends(true)` replaces it).
+  Imported worlds get a fresh code.
 - Host: pause menu → "פתח לחברים" → `HostNetwork.open()` registers peer id `cubica-v1-<CODE>` on the free
   public PeerJS signalling server (0.peerjs.com) with free STUN (Google, Cloudflare). Invite code
   `XXXX-XXXX` (alphabet without 0/O/1/I/L) and link `?join=CODE`. Each incoming connection becomes a

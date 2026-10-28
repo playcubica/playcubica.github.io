@@ -9,6 +9,8 @@ import { PeerTransport } from './PeerTransport';
 const ID_PREFIX = 'cubica-v1-';
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const JOIN_TIMEOUT_MS = 20_000;
+/** A world's fixed code can still be held for a moment by the page that had it before (reload). */
+const CODE_RETRIES = 6;
 
 /** Free public STUN servers (they only help each side discover its public address). */
 const RTC_CONFIG: RTCConfiguration = {
@@ -59,7 +61,7 @@ export function peerErrorMessage(err: PeerError<string> | Error | string): strin
     case 'disconnected':
       return 'אין חיבור לשרת התיווך החינמי (PeerJS). בדקו את חיבור האינטרנט ונסו שוב בעוד רגע.';
     case 'unavailable-id':
-      return 'קוד ההזמנה כבר תפוס. נסו לפתוח שוב.';
+      return 'קוד ההזמנה של העולם הזה תפוס כרגע — אולי העולם פתוח גם בחלון או במחשב אחר. סגרו אותו ונסו שוב, או בחרו "קוד חדש".';
     case 'webrtc':
     case 'negotiation-failed':
       return `החיבור הישיר נכשל. ${NAT_HINT}`;
@@ -105,24 +107,33 @@ export class HostNetwork {
   /** Last signalling problem (shown in the pause menu); cleared when it recovers. */
   problem: string | null = null;
 
-  constructor(private readonly onConnection: (t: ServerTransport) => void) {}
+  constructor(private readonly onConnection: (t: ServerTransport) => void, private readonly retryDelayMs = 3000) {}
 
   get connections(): number {
     return this.transports.size;
   }
 
-  /** Starts listening; resolves with the invite code. */
-  async open(): Promise<string> {
+  /**
+   * Starts listening; resolves with the invite code. With `code` (the world's saved code) it keeps that
+   * code: if it is still held (the previous page is just going away) it waits and tries again.
+   */
+  async open(code?: string): Promise<string> {
     if (this.peer) return this.code;
     const PeerClass = await loadPeer();
+    const fixed = code ?? null;
     for (let attempt = 0; ; attempt++) {
-      const code = newInviteCode();
+      const tryCode = fixed ?? newInviteCode();
       try {
-        this.peer = await openPeer(PeerClass, peerId(code));
-        this.code = code;
+        this.peer = await openPeer(PeerClass, peerId(tryCode));
+        this.code = tryCode;
         break;
       } catch (err) {
-        if ((err as PeerError<string>).type === 'unavailable-id' && attempt < 3) continue;
+        const taken = (err as PeerError<string>).type === 'unavailable-id';
+        if (taken && !fixed && attempt < 3) continue;
+        if (taken && fixed && attempt < CODE_RETRIES) {
+          await new Promise((r) => setTimeout(r, this.retryDelayMs));
+          continue;
+        }
         throw new Error(peerErrorMessage(err as Error));
       }
     }

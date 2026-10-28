@@ -580,10 +580,15 @@ export class App {
           <div class="invite-link">${esc(inviteLink(code))}</div>
           <button class="btn small-btn" data-a="copy">העתק קישור הזמנה</button>
           <div class="small">${others > 0 ? `מחוברים עוד ${others} שחקנים` : 'ממתין לחברים… (עד 8 שחקנים)'}</div>
+          <div class="small">הקוד קבוע לעולם הזה — אותו קוד ואותו קישור בכל פעם.</div>
+          <button class="btn small-btn" data-a="newcode">קוד חדש</button>
           ${session.networkProblem ? `<div class="error">${esc(session.networkProblem)}</div>` : ''}
         </div>`;
     } else if (server) {
-      invite = `<button class="btn" data-a="open">פתח לחברים</button>${openError ? `<p class="error">${esc(openError)}</p>` : ''}`;
+      const saved = server.meta.inviteCode;
+      invite = `<button class="btn" data-a="open">פתח לחברים</button>
+        ${saved ? `<p class="small">הקוד של העולם: <span dir="ltr">${esc(saved)}</span></p>` : ''}
+        ${openError ? `<p class="error">${esc(openError)}</p><button class="btn small-btn" data-a="newcode">קוד חדש</button>` : ''}`;
     }
     const s = this.show(`
       <div class="panel">
@@ -598,17 +603,23 @@ export class App {
       </div>`);
     el(s, '[data-a=resume]').onclick = () => c.resume();
     el(s, '[data-a=settings]').onclick = () => this.settingsMenu(() => this.session === session && this.pauseMenu(session));
+    const openWith = async (button: HTMLButtonElement, newCode: boolean) => {
+      button.disabled = true;
+      button.textContent = 'פותח…';
+      try {
+        await session.openToFriends(newCode);
+        if (this.session === session) this.pauseMenu(session);
+      } catch (err) {
+        if (this.session === session) this.pauseMenu(session, err instanceof Error ? err.message : String(err));
+      }
+    };
     const open = s.querySelector<HTMLButtonElement>('[data-a=open]');
-    if (open) {
-      open.onclick = async () => {
-        open.disabled = true;
-        open.textContent = 'פותח…';
-        try {
-          await session.openToFriends();
-          if (this.session === session) this.pauseMenu(session);
-        } catch (err) {
-          if (this.session === session) this.pauseMenu(session, err instanceof Error ? err.message : String(err));
-        }
+    if (open) open.onclick = () => void openWith(open, false);
+    const newCode = s.querySelector<HTMLButtonElement>('[data-a=newcode]');
+    if (newCode) {
+      newCode.onclick = () => {
+        if (!confirm('להחליף את קוד ההזמנה? הקוד והקישור הישנים יפסיקו לעבוד, ולחברים יהיה צריך לשלוח את החדשים.')) return;
+        void openWith(newCode, true);
       };
     }
     if (code) {

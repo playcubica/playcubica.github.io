@@ -4,7 +4,7 @@ import { verifyIdToken } from '../cloud/verifyToken';
 import { GameClient, type ClientStatus } from '../client/GameClient';
 import type { Settings } from '../client/settings';
 import { createLocalPair } from '../net/LocalTransport';
-import { HostNetwork } from '../net/peerNetwork';
+import { HostNetwork, newInviteCode } from '../net/peerNetwork';
 import type { Transport } from '../net/Transport';
 import { GameServer } from '../server/GameServer';
 import type { WorldMeta, WorldStorage } from '../server/storage/WorldStorage';
@@ -85,15 +85,24 @@ export class GameSession {
     return this.network?.problem ?? null;
   }
 
-  /** Starts accepting friends; resolves with the invite code. */
-  async openToFriends(): Promise<string> {
-    if (!this.server) throw new Error('only the host can open the world');
-    if (!this.network) {
-      const server = this.server;
-      this.network = new HostNetwork((t) => server.addConnection(t));
+  /**
+   * Starts accepting friends; resolves with the invite code. Each world keeps one code (saved with it),
+   * so the same code and link work every time it is opened. `newCode` replaces it.
+   */
+  async openToFriends(newCode = false): Promise<string> {
+    const server = this.server;
+    if (!server) throw new Error('only the host can open the world');
+    if (newCode) {
+      this.network?.close();
+      this.network = null;
+      server.meta.inviteCode = newInviteCode();
     }
+    if (!this.network) this.network = new HostNetwork((t) => server.addConnection(t));
+    server.meta.inviteCode ??= newInviteCode();
     try {
-      return await this.network.open();
+      const code = await this.network.open(server.meta.inviteCode);
+      void server.save();
+      return code;
     } catch (err) {
       this.network = null;
       throw err;
