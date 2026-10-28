@@ -38,6 +38,7 @@ export class GameSession {
   private network: HostNetwork | null = null;
   private stopped = false;
   private synced: SyncedStore | null = null;
+  private opening: Promise<string> | null = null;
 
   private constructor(server: GameServer | null, generator: WorkerChunkGenerator | null, client: GameClient, private readonly onLeave?: () => void) {
     this.server = server;
@@ -98,7 +99,24 @@ export class GameSession {
    * Starts accepting friends; resolves with the invite code. Each world keeps one code (saved with it),
    * so the same code and link work every time it is opened. `newCode` replaces it.
    */
-  async openToFriends(newCode = false): Promise<string> {
+  openToFriends(newCode = false): Promise<string> {
+    // One opening at a time (the automatic one and a click must not race for the same code).
+    if (this.opening && !newCode) return this.opening;
+    const run = this.openNow(newCode);
+    this.opening = run;
+    const done = () => {
+      if (this.opening === run) this.opening = null;
+    };
+    run.then(done, done);
+    return run;
+  }
+
+  /** True while the world is being opened to friends. */
+  get openingToFriends(): boolean {
+    return this.opening !== null;
+  }
+
+  private async openNow(newCode: boolean): Promise<string> {
     const server = this.server;
     if (!server) throw new Error('only the host can open the world');
     if (newCode) {
@@ -107,13 +125,14 @@ export class GameSession {
       server.meta.inviteCode = newInviteCode();
     }
     if (!this.network) this.network = new HostNetwork((t) => server.addConnection(t));
+    const network = this.network;
     server.meta.inviteCode ??= newInviteCode();
     try {
-      const code = await this.network.open(server.meta.inviteCode);
+      const code = await network.open(server.meta.inviteCode);
       void server.save();
       return code;
     } catch (err) {
-      this.network = null;
+      if (this.network === network) this.network = null;
       throw err;
     }
   }

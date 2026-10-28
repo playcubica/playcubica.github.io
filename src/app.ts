@@ -547,7 +547,9 @@ export class App {
         cloudUpToDate: opts.upToDate,
       }, (st) => this.status(st));
       const session = this.session;
-      if (opts.autoOpen) {
+      // A world that was opened to friends before (it has its code) or is shared opens again by
+      // itself, so the code friends have always works while someone plays it.
+      if (opts.autoOpen || meta.inviteCode) {
         session.openToFriends().catch((err) => console.warn('could not open to friends', err)).finally(() => {
           if (this.session === session && this.screen.style.display !== 'none' && this.screen.querySelector('[data-a=resume]')) this.pauseMenu(session);
         });
@@ -622,6 +624,8 @@ export class App {
           <button class="btn small-btn" data-a="newcode">קוד חדש</button>
           ${session.networkProblem ? `<div class="error">${esc(session.networkProblem)}</div>` : ''}
         </div>`;
+    } else if (server && session.openingToFriends) {
+      invite = `<div class="invite"><div>פותח את העולם לחברים…</div>${server.meta.inviteCode ? `<div class="invite-code">${esc(server.meta.inviteCode)}</div>` : ''}</div>`;
     } else if (server) {
       const saved = server.meta.inviteCode;
       invite = `<button class="btn" data-a="open">פתח לחברים</button>
@@ -662,12 +666,12 @@ export class App {
         void openWith(newCode, true);
       };
     }
-    if (code) {
-      // Keep the connected-players count fresh while the menu is open.
+    if (code || session.openingToFriends) {
+      // Keep the connected-players count (or the opening state) fresh while the menu is open.
       const token = this.screenToken;
       setTimeout(() => {
         if (this.screenToken === token && this.session === session) this.pauseMenu(session);
-      }, 3000);
+      }, code ? 3000 : 1000);
     }
     const copy = s.querySelector<HTMLButtonElement>('[data-a=copy]');
     if (copy && code) {

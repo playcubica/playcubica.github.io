@@ -211,7 +211,9 @@ from client-reported positions (bounded by the speed check).
   the world), so the code and link stay the same every time. `HostNetwork.open(code)` waits and retries
   (6 × 3 s) while the id is still held by a page that just closed; if it stays taken (the same world open
   elsewhere) the error says so and the pause menu offers "קוד חדש" (`openToFriends(true)` replaces it).
-  Imported worlds get a fresh code.
+  Imported worlds get a fresh code. A world that has a code (or is shared) opens to friends by itself
+  whenever it is hosted, so the code friends hold always works while someone plays it; concurrent opens
+  share one promise (`GameSession.opening`), and the pause menu shows "opening…" meanwhile.
 - Host: pause menu → "פתח לחברים" → `HostNetwork.open()` registers peer id `cubica-v1-<CODE>` on the free
   public PeerJS signalling server (0.peerjs.com) with free STUN (Google, Cloudflare). Invite code
   `XXXX-XXXX` (alphabet without 0/O/1/I/L) and link `?join=CODE`. Each incoming connection becomes a
