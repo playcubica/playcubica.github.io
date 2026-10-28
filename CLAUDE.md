@@ -17,13 +17,15 @@ Node is installed locally (no Homebrew): `~/.local/node/bin` (Node 22). Add it t
 
 ```bash
 export PATH=~/.local/node/bin:$PATH
-npm run dev        # http://localhost:5173  (?seed=<text|number>&vd=<2..16>)
+npm run dev        # http://localhost:5173  (?vd=<2..16> view distance)
 npm test           # vitest
 npm run build      # tsc --noEmit + vite build -> dist/
 ```
 
 In the Claude desktop app: preview server named `cubica` (defined in `/Users/idos/אתר/.claude/launch.json`).
-In the browser console, `window.cubica = { server, client }` is handy for debugging.
+In the browser console, `window.cubica` is the `App` (`cubica.session.server` / `cubica.session.client`).
+Automated browsers can't get Pointer Lock: to test, set `client.state = 'playing'` and drive
+`client.controls.down` / `client.controls.buttons` / `client.interaction.mouseDown(2)` from JS.
 
 ## Architecture
 
@@ -42,18 +44,25 @@ In the browser console, `window.cubica = { server, client }` is handy for debugg
 
 ```
 src/
-  main.ts                 boot (stage 1: straight into single player)
+  main.ts app.ts          boot; App = menus (main / new world / load / join / pause) + session lifecycle
+  game/GameSession.ts     server + local client for one world being played
   shared/                 pure code (no DOM), used by server, client and workers
     constants.ts rng.ts noise/simplex.ts
     blocks/registry.ts    block definitions + lookup tables (OPAQUE, LIGHT_*, TEX_*) + TEXTURE_NAMES
     world/Chunk.ts chunkCodec.ts lighting.ts biomes.ts
     mesh/mesher.ts        greedy mesher (padded 18×18×H volume)
+    items/                registry (Hebrew names, CREATIVE_ITEMS, blockDrop), Inventory (shared click logic), mining
+    physics/              PlayerBody (fixed-step movement), collision (AABB sweep), raycast (DDA)
     protocol/messages.ts  ClientMsg / ServerMsg
   server/ GameServer.ts ServerWorld.ts WorkerChunkGenerator.ts worldgen/WorldGenerator.ts
-  client/ GameClient.ts ClientWorld.ts render/ textures/ input/ ui/
+          storage/WorldStorage.ts   IndexedDB worlds + .cubica export/import
+  client/ GameClient.ts ClientWorld.ts render/ textures/ input/ ui/ player/LocalPlayer.ts
+          interaction/BlockInteraction.ts   targeting, mining progress + cracks, placing, pick block
+          ui/Hud.ts InventoryScreen.ts icons.ts
   net/    Transport.ts LocalTransport.ts
   workers/ WorkerPool.ts worldgen.worker.ts mesher.worker.ts types.ts
-tests/    vitest (noise, worldgen, codec, lighting, mesher)
+tests/    vitest (noise, worldgen, codec, lighting, mesher, inventory, physics, raycast, world file,
+          host validation + save/load through a real GameServer with a fake generator and in-memory store)
 ```
 
 ### Chunk data model
@@ -92,10 +101,33 @@ tests/    vitest (noise, worldgen, codec, lighting, mesher)
   pending-block queue, so every chunk is independent and deterministic.
 
 ### Protocol (Host ↔ Client)
-See `src/shared/protocol/messages.ts`. Implemented so far: `hello`, `welcome`, `move`, `chunk`,
-`unloadChunk`, `time`, `kick`. The rest are reserved with the stage they arrive in noted.
-Validation on the host (stage 4): reach ≤ 6, minimum dig time, speed limit, no placing a block inside a
-player, the item must be held, chat rate-limit.
+See `src/shared/protocol/messages.ts`. Implemented: `hello`, `welcome`, `move`, `dig`, `place`, `held`,
+`inv`, `setGameMode` (host only), `chunk`, `unloadChunk`, `blockChange`, `inventory`, `gameMode`, `time`,
+`kick`. The rest are reserved with the stage they arrive in noted.
+
+**Prediction + authority:** the client applies dig/place/inventory actions immediately (same shared code)
+and sends them; the host validates and broadcasts `blockChange` to everyone holding that chunk. If it
+rejects, it sends the true block (`blockChange`) and/or an `inventory` snapshot back, which overwrites the
+prediction.
+
+Host validation already in place: reach (5 + 1.5 slack, from the eye), minimum dig time in survival (70% of
+`breakTime`), the held stack must contain a placeable block, the target must be replaceable, a placed block
+must touch something, it can't overlap a player, plants need solid ground, creative-only inventory actions.
+Still to come in stage 4: movement speed limit, chat rate-limit.
+
+### Gameplay (stage 2)
+- Physics `PlayerBody` (blocks/seconds, fixed 60 Hz step): walk 4.3, sprint 5.6, sneak 1.3 (no walking off
+  edges), jump ≈1.26 blocks, swimming with drag, creative flight (double-tap Space). Unloaded chunks count
+  as solid so nobody falls through the world while it streams in.
+- Mining: `breakTime = hardness × 1.5`, ×10/3 without a pickaxe on blocks that want one, ÷ tool speed with
+  the right tool (tools arrive in stage 3). Creative breaks instantly (0.2 s repeat).
+- Drops (stage-2 simplification, replaced by drop tables in stage 3): grass → dirt, stone → rubblestone,
+  leaves/glass/ice/tall grass → nothing. Items go straight into the inventory.
+- Game mode is per player (saved with the player). The world's mode is the default for new players.
+- Saving: only changed chunks are stored; untouched ones regenerate from the seed. Autosave every 30 s,
+  on tab hide and on "save and quit". Chunks unloaded before their save finishes stay in memory (`evicted`).
+  Players are saved by name (single player: "Player").
+- `.cubica` file: magic `CUBICAW1` + JSON header (WorldMeta) + length-prefixed chunks.
 
 ## Stages and status
 
@@ -105,9 +137,10 @@ before the user has approved the current one.**
 1. ✅ **Engine and world**: infinite world from a seed, 16×16×256 chunks, 8 biomes, caves, ores, trees,
    water, corerock, greedy meshing, frustum culling, sky + block lighting, day/night, fog, workers, F3
    overlay. Temporary control: free flight (WASD, Space/Shift, Ctrl for speed).
-2. ⏳ **Player and interaction**: AABB physics (gravity, jump, sprint, sneak, swim), DDA raycast, mining
+2. ✅ **Player and interaction**: AABB physics (gravity, jump, sprint, sneak, swim), DDA raycast, mining
    by hardness/tool, block placement, 9-slot hotbar, inventory (E), Creative, IndexedDB save + `.cubica`
-   export/import, main menu (new / load / join).
+   export/import, main menu (new / load / join), pause menu. "Join" is a placeholder until stage 4.
+   Building blocks added: planks ×2, rubblestone, glass, cut stone.
 3. ⏳ **Survival**: health, hunger, fall damage, drowning, death/respawn, 2×2/3×3 crafting with our own
    recipes, 5 tool tiers with durability, furnace, chests, bed, torches, doors, food, drop tables.
 4. ⏳ **P2P multiplayer**: "Open to friends" → code/link `?join=CODE`, PeerJS + public STUN, chunk sync,

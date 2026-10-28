@@ -7,29 +7,99 @@ body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: #000;
+  background: #0b1020;
   font-family: system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
   user-select: none;
+  color: #fff;
 }
 
 .game-canvas {
   display: block;
+  position: fixed;
+  inset: 0;
   width: 100vw;
   height: 100vh;
 }
 
-.crosshair {
+/* --- HUD --------------------------------------------------------------- */
+
+.hud {
   position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+.crosshair {
+  position: absolute;
   left: 50%;
   top: 50%;
   width: 18px;
   height: 18px;
   margin: -9px 0 0 -9px;
-  pointer-events: none;
   mix-blend-mode: difference;
   background:
     linear-gradient(#fff, #fff) center / 2px 18px no-repeat,
     linear-gradient(#fff, #fff) center / 18px 2px no-repeat;
+}
+
+.underwater {
+  position: absolute;
+  inset: 0;
+  background: rgba(20, 60, 140, 0.28);
+}
+
+.hotbar {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 2px solid rgba(255, 255, 255, 0.25);
+}
+
+.slot {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  background: rgba(70, 70, 80, 0.55);
+  border: 2px solid rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.slot img {
+  width: 36px;
+  height: 36px;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+
+.slot .count {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  font: bold 14px/1 ui-monospace, Menlo, monospace;
+  text-shadow: 2px 2px 0 #222;
+  pointer-events: none;
+}
+
+.hotbar .slot.selected {
+  border-color: #fff;
+  background: rgba(140, 140, 150, 0.6);
+}
+
+.item-toast {
+  position: absolute;
+  bottom: 70px;
+  width: 100%;
+  text-align: center;
+  font-size: 16px;
+  text-shadow: 2px 2px 0 #222;
+  opacity: 0;
 }
 
 .debug-overlay {
@@ -45,49 +115,256 @@ body {
   direction: ltr;
 }
 
-.overlay {
+/* --- Inventory ----------------------------------------------------------- */
+
+.inv-screen {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+}
+
+.inv-panel {
+  background: #c6c6c6;
+  color: #333;
+  border: 3px solid #fff;
+  border-right-color: #555;
+  border-bottom-color: #555;
+  padding: 10px 12px;
+  max-height: 96vh;
+  overflow-y: auto;
+}
+
+.inv-title {
+  font-size: 14px;
+  margin: 6px 2px 4px;
+  direction: rtl;
+}
+
+.inv-grid {
+  display: grid;
+  grid-template-columns: repeat(9, 44px);
+  gap: 2px;
+}
+
+.inv-grid .slot {
+  background: #8b8b8b;
+  border-color: #373737 #fff #fff #373737;
+  cursor: pointer;
+}
+
+.inv-grid .slot:hover {
+  background: #a8a8a8;
+}
+
+.inv-hotbar {
+  margin-top: 8px;
+}
+
+.inv-palette {
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.inv-hint {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #444;
+  direction: rtl;
+}
+
+.inv-cursor {
+  position: fixed;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  background: none !important;
+  border: none !important;
+  color: #fff;
+}
+
+.inv-tooltip {
+  position: fixed;
+  pointer-events: none;
+  background: rgba(20, 8, 30, 0.92);
+  border: 2px solid #3b1f6b;
+  color: #fff;
+  padding: 3px 7px;
+  font-size: 13px;
+  display: none;
+  white-space: nowrap;
+}
+
+/* --- Menus ----------------------------------------------------------------- */
+
+.screen {
   position: fixed;
   inset: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  background: rgba(8, 12, 24, 0.62);
-  color: #fff;
-  text-align: center;
-  cursor: pointer;
+  background: rgba(8, 12, 24, 0.6);
+  z-index: 10;
   padding: 16px;
+  overflow-y: auto;
 }
 
-.overlay h1 {
+.screen.menu-bg {
+  background:
+    radial-gradient(ellipse at 50% 120%, rgba(110, 170, 80, 0.55), transparent 55%),
+    radial-gradient(ellipse at 50% -20%, rgba(80, 130, 220, 0.6), transparent 60%),
+    #0d1428;
+}
+
+.panel {
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  text-align: center;
+}
+
+.panel.wide {
+  width: min(620px, 100%);
+}
+
+.panel h2 {
   margin: 0 0 8px;
-  font-size: 56px;
-  letter-spacing: 2px;
-  text-shadow: 4px 4px 0 #2a3d1c;
+  font-size: 26px;
+  text-shadow: 3px 3px 0 #1d2a14;
+}
+
+.logo {
+  margin: 0;
+  font-size: 64px;
+  letter-spacing: 3px;
   color: #9ed36a;
+  text-shadow: 5px 5px 0 #2a3d1c;
 }
 
-.overlay .big {
-  font-size: 22px;
-  margin: 4px 0 12px;
+.tagline {
+  margin: 0 0 14px;
+  opacity: 0.85;
 }
 
-.overlay .small {
+.btn {
+  display: block;
+  font: inherit;
+  font-size: 17px;
+  color: #fff;
+  background: #6d6d6d;
+  border: 3px solid;
+  border-color: #a9a9a9 #3b3b3b #3b3b3b #a9a9a9;
+  padding: 9px 14px;
+  cursor: pointer;
+  text-shadow: 2px 2px 0 #333;
+}
+
+.btn:hover:not(:disabled) {
+  background: #7d8fbf;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn.primary {
+  background: #4f7f3a;
+}
+
+.btn.danger {
+  background: #8c3a3a;
+}
+
+.btn.on {
+  background: #4f7f3a;
+  border-color: #b5e08f #24401a #24401a #b5e08f;
+}
+
+.small-btn {
+  font-size: 14px;
+  padding: 6px 10px;
+}
+
+.toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.toggle .btn {
+  flex: 1;
+}
+
+.panel label,
+.label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: right;
+  font-size: 14px;
+}
+
+.input {
+  font: inherit;
+  font-size: 16px;
+  padding: 8px;
+  background: #111;
+  color: #fff;
+  border: 2px solid #a0a0a0;
+}
+
+.world-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.world-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 8px;
+}
+
+.world-info {
+  flex: 1;
+  text-align: right;
+}
+
+.world-name {
+  font-size: 17px;
+}
+
+.small {
   font-size: 12px;
-  opacity: 0.7;
+  opacity: 0.75;
 }
 
-.overlay .keys {
+.warn {
+  color: #ffcf7a;
+  font-size: 14px;
+}
+
+.keys {
+  margin: 10px auto 0;
   border-collapse: collapse;
-  font-size: 15px;
+  font-size: 13px;
+  opacity: 0.9;
 }
 
-.overlay .keys td {
-  padding: 3px 12px;
+.keys td {
+  padding: 2px 10px;
+  text-align: right;
 }
 
-.overlay .keys td:first-child {
+.keys td:first-child {
   font-family: ui-monospace, Menlo, monospace;
   color: #ffe08a;
   direction: ltr;

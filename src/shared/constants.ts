@@ -12,3 +12,5 @@ export const DAY_LENGTH_TICKS = 24000;
 export const PROTOCOL_VERSION = 1;
 export const DEFAULT_VIEW_DISTANCE = 8;
 export const MAX_PLAYERS = 8;
+
+export const GameMode = { SURVIVAL: 0, CREATIVE: 1 } as const;

@@ -8,6 +8,7 @@ export class Renderer {
   readonly gl: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
+  private readonly onResize = () => this.resize();
 
   constructor(container: HTMLElement, fov = 70) {
     this.gl = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
@@ -18,7 +19,7 @@ export class Renderer {
     this.camera = new THREE.PerspectiveCamera(fov, 1, 0.1, 1000);
     this.camera.rotation.order = 'YXZ';
     this.resize();
-    window.addEventListener('resize', () => this.resize());
+    window.addEventListener('resize', this.onResize);
   }
 
   get canvas(): HTMLCanvasElement {
@@ -35,5 +36,11 @@ export class Renderer {
 
   render(): void {
     this.gl.render(this.scene, this.camera);
+  }
+
+  dispose(): void {
+    window.removeEventListener('resize', this.onResize);
+    this.gl.dispose();
+    this.gl.domElement.remove();
   }
 }

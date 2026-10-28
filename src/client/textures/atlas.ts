@@ -11,6 +11,11 @@ export interface BlockTextures {
 
 const ATLAS_COLUMNS = 8;
 
+/** Top-left pixel of a texture layer inside the atlas canvas. */
+export function atlasTile(layer: number): [number, number] {
+  return [(layer % ATLAS_COLUMNS) * TEX_SIZE, Math.floor(layer / ATLAS_COLUMNS) * TEX_SIZE];
+}
+
 export function buildBlockTextures(): BlockTextures {
   const count = TEXTURE_NAMES.length;
   const rows = Math.ceil(count / ATLAS_COLUMNS);
@@ -23,9 +28,10 @@ export function buildBlockTextures(): BlockTextures {
   const data = new Uint8Array(layerBytes * count);
   TEXTURE_NAMES.forEach((name, layer) => {
     const pix = paintTexture(name);
-    ctx.putImageData(new ImageData(pix.data, TEX_SIZE, TEX_SIZE), (layer % ATLAS_COLUMNS) * TEX_SIZE, Math.floor(layer / ATLAS_COLUMNS) * TEX_SIZE);
+    const [sx, sy] = atlasTile(layer);
+    ctx.putImageData(new ImageData(pix.data, TEX_SIZE, TEX_SIZE), sx, sy);
     // Layers are read back from the atlas, so the atlas is the single source of truth.
-    const tile = ctx.getImageData((layer % ATLAS_COLUMNS) * TEX_SIZE, Math.floor(layer / ATLAS_COLUMNS) * TEX_SIZE, TEX_SIZE, TEX_SIZE);
+    const tile = ctx.getImageData(sx, sy, TEX_SIZE, TEX_SIZE);
     data.set(tile.data, layer * layerBytes);
   });
 

@@ -131,6 +131,20 @@ function foliage(base: RGB, holes: number) {
   };
 }
 
+function planks(base: RGB) {
+  return (p: Pixmap, r: Rand) => {
+    for (let y = 0; y < TEX_SIZE; y++) {
+      const board = y >> 2;
+      const seam = y % 4 === 3;
+      for (let x = 0; x < TEX_SIZE; x++) {
+        const joint = x === ((board * 5 + 3) % TEX_SIZE);
+        const grain = 0.94 + Math.sin((x + board * 7) * 0.9) * 0.03 + r() * 0.05;
+        p.set(x, y, seam || joint ? shade(base, 0.68) : shade(base, grain * (board % 2 ? 0.95 : 1)));
+      }
+    }
+  };
+}
+
 const PAINTERS: Record<string, (p: Pixmap, r: Rand) => void> = {
   stone,
   dirt,
@@ -281,6 +295,40 @@ const PAINTERS: Record<string, (p: Pixmap, r: Rand) => void> = {
     branch(7, 11, -1, 6);
     branch(8, 12, 1, 7);
     branch(7, 9, 1, 4);
+  },
+  ashwood_planks: planks([184, 160, 120]),
+  frostpine_planks: planks([118, 82, 56]),
+  rubblestone(p, r) {
+    speckle(p, r, [108, 108, 112], 0.05);
+    // Irregular cobbles separated by dark mortar lines.
+    for (let y = 0; y < TEX_SIZE; y++) {
+      for (let x = 0; x < TEX_SIZE; x++) {
+        const cell = ((x + (y >> 2) * 3) >> 2) + (y >> 2) * 7;
+        if (x % 4 === ((y >> 2) * 3) % 4 || y % 4 === 0) p.set(x, y, [70, 70, 74]);
+        else p.set(x, y, shade([118, 118, 124], 0.85 + ((cell * 37) % 10) / 40 + r() * 0.06));
+      }
+    }
+  },
+  glass(p) {
+    plantBase(p);
+    for (let t = 0; t < TEX_SIZE; t++) {
+      for (const [x, y] of [[t, 0], [t, 15], [0, t], [15, t]]) p.set(x, y, [214, 232, 240]);
+    }
+    for (let t = 0; t < 4; t++) {
+      p.set(3 + t, 6 - t, [240, 250, 255]);
+      p.set(9 + t, 12 - t, [240, 250, 255]);
+    }
+  },
+  cut_stone(p, r) {
+    speckle(p, r, [132, 134, 138], 0.04);
+    for (let t = 0; t < TEX_SIZE; t++) {
+      p.set(t, 7, [92, 92, 96]);
+      p.set(t, 15, [92, 92, 96]);
+      p.set(t, 8, [156, 158, 162]);
+      p.set(t, 0, [156, 158, 162]);
+    }
+    for (let y = 0; y < 7; y++) p.set(7, y, [92, 92, 96]);
+    for (let y = 8; y < 15; y++) p.set(15, y, [92, 92, 96]);
   },
 };
 

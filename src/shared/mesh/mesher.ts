@@ -1,4 +1,4 @@
-import { OPAQUE, RENDER, TEX_BOTTOM, TEX_SIDE, TEX_TOP, TRANSLUCENT } from '../blocks/registry';
+import { CULL_SAME, OPAQUE, RENDER, TEX_BOTTOM, TEX_SIDE, TEX_TOP, TRANSLUCENT } from '../blocks/registry';
 
 // Greedy mesher for one chunk. Input is a padded volume: the chunk plus a one-block
 // ring of its neighbours, so faces and smooth lighting at the edges are correct.
@@ -196,6 +196,7 @@ export function buildChunkMesh(input: MeshInput): MeshOutput {
           // Translucent faces don't write depth, so hidden inner faces (ice over water)
           // would draw over the visible ones: skip faces between translucent blocks.
           if (translucent && TRANSLUCENT[nid]) continue;
+          if (CULL_SAME[id] && nid === id) continue;
           const mesh = translucent ? 1 : 0;
           const layer = axis === 1 ? (sign > 0 ? TEX_TOP[id] : TEX_BOTTOM[id]) : TEX_SIDE[id];
           const waterTop = r === 3 && blockAt(x, y + 1, z) !== id;

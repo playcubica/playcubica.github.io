@@ -51,7 +51,15 @@ export class Chunk {
 
   setBlock(x: number, y: number, z: number, raw: number): void {
     this.blocks[idx(x, y, z)] = raw;
-    if (raw !== 0 && y > this.maxY) this.maxY = y;
+    const col = x | (z << 4);
+    if (raw !== 0) {
+      if (y > this.heightmap[col]) this.heightmap[col] = y;
+      if (y > this.maxY) this.maxY = y;
+    } else if (y === this.heightmap[col]) {
+      let top = y;
+      while (top > 0 && this.blocks[col | (top << 8)] === 0) top--;
+      this.heightmap[col] = top;
+    }
   }
 
   skyLight(x: number, y: number, z: number): number {
