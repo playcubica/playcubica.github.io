@@ -304,10 +304,11 @@ before the user has approved the current one.**
 7. ✅ **Publishing**: GitHub Actions → GitHub Pages on every push, with a permanent link.
 
 ### Publishing (stage 7)
-- Live: **https://idoszmail-crypto.github.io/cubica/**. Repo: https://github.com/idoszmail-crypto/cubica
-  (public; Pages source = "GitHub Actions").
+- Live: **https://playcubica.github.io/**. Repo: https://github.com/playcubica/playcubica.github.io
+  (public, in the free GitHub organization `playcubica`, owned by idoszmail-crypto; Pages source =
+  "GitHub Actions"). It moved there from idoszmail-crypto/cubica; the old Pages URL no longer serves.
 - `.github/workflows/deploy.yml`: on every push to `main` → `npm ci`, `npm test`, `npm run build`, upload
-  `dist/`, `deploy-pages`. A failing test blocks the deploy. `gh run list -R idoszmail-crypto/cubica` shows runs.
+  `dist/`, `deploy-pages`. A failing test blocks the deploy. `gh run list -R playcubica/playcubica.github.io` shows runs.
 - `gh` is installed locally at `~/.local/gh/bin/gh` (logged in as idoszmail-crypto with the `workflow` scope;
   pushing files under `.github/workflows` needs that scope).
 - `base: './'` keeps the build path-agnostic. Check a production build under a sub-path with the
