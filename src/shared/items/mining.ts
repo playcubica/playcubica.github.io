@@ -1,4 +1,4 @@
-import { B, blockDef, DOOR_UPPER, RENDER } from '../blocks/registry';
+import { B, BED_HEAD, blockDef, DOOR_UPPER, RENDER } from '../blocks/registry';
 import { I, type ItemDef, type ItemStack } from './registry';
 
 /** True if breaking this block with the held item yields its drop. */
@@ -82,6 +82,9 @@ export function blockDrops(raw: number, held: ItemDef | undefined, rnd: () => nu
       return one(B.FURNACE);
     case B.ASHWOOD_DOOR:
       return (raw >>> 12) & DOOR_UPPER ? [] : one(B.ASHWOOD_DOOR);
+    case B.BEDROLL:
+      // A two-block bed drops once, from its foot half.
+      return (raw >>> 12) & BED_HEAD ? [] : one(B.BEDROLL);
     case B.ICE:
     case B.GLASS:
     case B.WATER:

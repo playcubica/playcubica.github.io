@@ -1,3 +1,5 @@
+import { B } from '../blocks/registry';
+import { waterFlow } from '../world/fluid';
 import { sweepAxis, type SolidQuery } from './collision';
 
 // Movement physics for players and creatures, in blocks and seconds. Players run it
@@ -5,6 +7,8 @@ import { sweepAxis, type SolidQuery } from './collision';
 
 export interface WorldQuery extends SolidQuery {
   isWater(x: number, y: number, z: number): boolean;
+  /** Raw block values, for the water current and bouncing on beds (optional). */
+  getRaw?(x: number, y: number, z: number): number;
 }
 
 export interface MoveInput {
@@ -37,6 +41,10 @@ const WATER_ACCEL = 6;
 const WATER_DRAG = 4;
 const WATER_SINK = 2.2;
 const SWIM_UP = 3.2;
+/** Speed of a water current, blocks per second. */
+const CURRENT = 1.4;
+/** Landing on a bed throws you back up with this share of the impact speed. */
+const BED_BOUNCE = 0.66;
 
 export class PlayerBody {
   /** Feet position (centre of the bottom face). */
@@ -60,6 +68,8 @@ export class PlayerBody {
   walkSpeed = WALK;
   /** Creatures that walk up walls (Skitterling). */
   climber = false;
+  /** Set when the body bounced off a bed (cleared by whoever reports it). */
+  bounced = false;
 
   box(x = this.x, y = this.y, z = this.z): { min: number[]; max: number[] } {
     const h = this.width / 2;
@@ -108,9 +118,17 @@ export class PlayerBody {
       speed = this.sneaking ? SNEAK : this.sprinting ? this.walkSpeed * (SPRINT / WALK) : this.walkSpeed;
       accel = this.onGround ? GROUND_ACCEL : AIR_ACCEL;
     }
+    // A water current carries you along.
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    if (this.inWater && !this.flying && q.getRaw) {
+      const f = waterFlow(q.getRaw, fx, Math.floor(this.y + 0.4), fz);
+      if (f) [cx, cy, cz] = f;
+    }
     const k = 1 - Math.exp(-accel * dt);
-    this.vx += (ix * speed - this.vx) * k;
-    this.vz += (iz * speed - this.vz) * k;
+    this.vx += (ix * speed + cx * CURRENT - this.vx) * k;
+    this.vz += (iz * speed + cz * CURRENT - this.vz) * k;
 
     // Vertical.
     if (this.flying) {
@@ -119,7 +137,7 @@ export class PlayerBody {
     } else if (this.inWater) {
       // Water drag: vertical speed eases towards swimming up or slowly sinking.
       const kv = 1 - Math.exp(-WATER_DRAG * dt);
-      this.vy += ((input.jump ? SWIM_UP : -WATER_SINK) - this.vy) * kv;
+      this.vy += ((input.jump ? SWIM_UP : -WATER_SINK + cy * CURRENT) - this.vy) * kv;
       // Hop out onto a ledge.
       if (input.jump && this.horizontalCollision) this.vy = Math.max(this.vy, 5.5);
     } else if (this.climber && this.horizontalCollision && input.forward > 0) {
@@ -159,8 +177,14 @@ export class PlayerBody {
     if (rx !== dx) this.vx = 0;
     if (rz !== dz) this.vz = 0;
     const landed = dy < 0 && ry !== dy;
+    const impact = this.vy;
     if (ry !== dy) this.vy = 0;
     this.onGround = landed || (dy === 0 && this.onGround);
+    if (landed && !this.sneaking && impact < -3 && q.getRaw && (q.getRaw(Math.floor(this.x), Math.floor(this.y - 0.01), Math.floor(this.z)) & 0xfff) === B.BEDROLL) {
+      this.vy = -impact * BED_BOUNCE;
+      this.onGround = false;
+      this.bounced = true;
+    }
     if (this.onGround && this.flying) this.flying = false;
 
     if (this.onGround || this.inWater || this.flying) this.fallSpeed = 0;

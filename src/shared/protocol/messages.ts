@@ -15,6 +15,8 @@ export const MoveFlag = {
   SNEAK: 2,
   SPRINT: 4,
   FLYING: 8,
+  /** Bounced off a bed since the last move (halves fall damage). */
+  BOUNCED: 16,
 } as const;
 
 export type ClientMsg =
@@ -135,4 +137,6 @@ export type EntityInfo =
   | { id: number; kind: 'item'; x: number; y: number; z: number; item: ItemStack }
   | { id: number; kind: 'mob'; mob: number; x: number; y: number; z: number; yaw: number; variant?: number }
   /** A flying thorn; clients extrapolate it from its launch velocity. */
-  | { id: number; kind: 'projectile'; x: number; y: number; z: number; vx: number; vy: number; vz: number };
+  | { id: number; kind: 'projectile'; x: number; y: number; z: number; vx: number; vy: number; vz: number }
+  /** Falling sand/gravel (`raw` block value); moves arrive in entityMove like items. */
+  | { id: number; kind: 'block'; raw: number; x: number; y: number; z: number };

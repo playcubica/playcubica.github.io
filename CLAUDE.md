@@ -355,6 +355,36 @@ before the user has approved the current one.**
 - Testing without hardware: override `navigator.getGamepads` with a fake standard pad and call
   `gamepad.poll(performance.now())` (import `/src/client/input/Gamepad.ts` in the dev page).
 
+### Block behaviour closer to the genre (after stage 7)
+Reference values come from the genre's well-known mechanics (researched on the public wiki); textures, names
+and art stay our own.
+- **Bed (bedroll)**: two blocks. State bits 0-1 facing (head points that way), `BED_HEAD` 4, `BED_PAIRED` 8
+  (older one-block bedrolls have no PAIRED bit and keep working). `placementRaw` gives the foot; host and
+  client place the head at `bedPartner()`; both halves need solid ground. `isSupported` requires the matching
+  partner, so breaking either half pops the other; only the foot drops the item. Height 9/16. Sleep: within
+  3 blocks, no hostiles within 8 horizontal / 5 vertical. Landing on it bounces (0.66 of impact, not when
+  sneaking; `PlayerBody.bounced` → `MoveFlag.BOUNCED`) and the host counts half the fall.
+- **Cactus**: box 14/16 wide, collision 15/16 high (`BlockDef.collision`). Touching the cell → 1 damage
+  every 10 ticks to players and creatures (`tickCactus`, `MobManager.hurtWhere`); dropped items touching it are
+  destroyed. Needs sand/cactus below and nothing solid beside it. Grows like the genre: age in state 0-15
+  (stored without broadcasting), +1 block at 16, max 3 tall.
+- **Change queue**: every `setBlockAndBroadcast` adds the cell to `updates`; `processUpdates` (once per tick,
+  ≤4096 cells) looks at each cell and its six neighbours: pops unsupported blocks (with drops), starts
+  sand/gravel falling, schedules water, schedules leaf-decay checks.
+- **Falling blocks** (`server/FallingBlocks.ts`): entity kind `'block'` (raw), 0.04 b/tick² with 0.98 drag;
+  lands on the first solid cell; turns into the block if the landing cell is replaceable (plants drop), else
+  drops as an item. Client draws a textured cube (`EntityRenderer.spawnBlock`, `tileCanvas`).
+- **Leaf decay**: natural leaves (state 0) near a change get a check 1–11 s later; no log within 6 steps
+  through leaves → they decay with their normal drops (+2% stick). Placed leaves carry `LEAVES_PLACED`.
+- **Flowing water** (`shared/world/fluid.ts` + `server/water.ts`): state 0 source, 1–7 flowing, bit 3
+  falling. Checks run `FLOW_DELAY` = 5 ticks after a neighbour changes (≤2000 a tick). Falls first; only
+  sources spread sideways from on top of water; sideways spread goes towards the nearest way down within 4
+  (water below counts as a way down), up to 7 from a source or a waterfall's landing spot. Two sources on
+  solid ground (or above a source) make a new source. Plants wash away. Worldgen water is all sources and
+  stays still until disturbed; random ticks re-check leftover flowing water. The current (`waterFlow`)
+  pushes bodies at 1.4 b/s, falling water pushes down. Mesher: liquids per cell with corner heights averaged
+  over the four cells sharing the corner (sources weigh 10×), sides only towards open cells.
+
 ### Stage 1 notes
 - Per-chunk performance (M-series, Node): generation ~1.6 ms, lighting ~1.2 ms, meshing ~4.7 ms. 60 FPS at
   view distance 8 (~300 chunks, ~100–200 draw calls).

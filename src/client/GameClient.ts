@@ -606,6 +606,7 @@ export class GameClient implements InteractionHost, WindowHost {
         break;
       case 'entitySpawn':
         if (msg.entity.kind === 'item') this.entities.spawn(msg.entity);
+        else if (msg.entity.kind === 'block') this.entities.spawnBlock(msg.entity);
         else this.mobs.spawn(msg.entity);
         if (msg.entity.kind === 'projectile') this.audio.play('thorn', msg.entity);
         break;
@@ -797,7 +798,8 @@ export class GameClient implements InteractionHost, WindowHost {
     if (this.state !== 'loading' && this.state !== 'dead' && now - this.lastMoveSent >= 1000 / TICKS_PER_SECOND) {
       this.lastMoveSent = now;
       const flags = (body.onGround ? MoveFlag.ON_GROUND : 0) | (body.sneaking ? MoveFlag.SNEAK : 0) |
-        (body.sprinting ? MoveFlag.SPRINT : 0) | (body.flying ? MoveFlag.FLYING : 0);
+        (body.sprinting ? MoveFlag.SPRINT : 0) | (body.flying ? MoveFlag.FLYING : 0) | (body.bounced ? MoveFlag.BOUNCED : 0);
+      body.bounced = false;
       this.send({
         t: 'move', seq: this.moveSeq++, x: body.x, y: body.y, z: body.z,
         yaw: this.controls.yaw, pitch: this.controls.pitch, flags,

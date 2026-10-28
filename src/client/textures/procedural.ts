@@ -384,6 +384,17 @@ const PAINTERS: Record<string, (p: Pixmap, r: Rand) => void> = {
     for (let y = 0; y < 5; y++) for (let x = 1; x < 15; x++) p.set(x, y, shade([236, 232, 220], 0.95 + r() * 0.05));
     for (let x = 0; x < TEX_SIZE; x++) { p.set(x, 5, [140, 46, 42]); if (x % 4 === 1) p.set(x, 10, [140, 46, 42]); }
   },
+  // Two-block bed: the head half has a pillow, the foot half a striped blanket (both symmetric,
+  // so they read right whichever way the bed faces).
+  bedroll_head(p, r) {
+    speckle(p, r, [176, 64, 58], 0.05);
+    for (let y = 2; y < 14; y++) for (let x = 2; x < 14; x++) p.set(x, y, shade([236, 232, 220], 0.93 + r() * 0.07));
+    for (let t = 2; t < 14; t++) { p.set(t, 2, [200, 196, 186]); p.set(t, 13, [200, 196, 186]); p.set(2, t, [200, 196, 186]); p.set(13, t, [200, 196, 186]); }
+  },
+  bedroll_foot(p, r) {
+    speckle(p, r, [176, 64, 58], 0.05);
+    for (let t = 0; t < TEX_SIZE; t++) for (const k of [4, 11]) { p.set(t, k, [140, 46, 42]); p.set(k, t, [140, 46, 42]); }
+  },
   bedroll_side(p, r) {
     planks([160, 120, 74])(p, r);
     for (let y = 0; y < 8; y++) for (let x = 0; x < TEX_SIZE; x++) p.set(x, y, shade([176, 64, 58], 0.9 + r() * 0.1));

@@ -1,5 +1,5 @@
 import { I, toolId } from '../items/registry';
-import { B, DIR_VEC, DOOR_UPPER, FACING_DIR, OPAQUE, OPPOSITE_DIR, PUSHER_EXTENDED, RENDER, SOLID, TORCH_WALL, withState } from './registry';
+import { B, BED_HEAD, BED_PAIRED, DIR_VEC, DOOR_UPPER, FACING_DIR, LEAVES_PLACED, OPAQUE, OPPOSITE_DIR, PUSHER_EXTENDED, RENDER, SOLID, TORCH_WALL, withState } from './registry';
 
 // Orientation when placing, and which blocks need another block to hold them up.
 // Shared by the client (prediction) and the host (validation).
@@ -14,6 +14,12 @@ export function facingTowards(yaw: number): number {
   const fz = Math.cos(yaw);
   if (Math.abs(fx) > Math.abs(fz)) return fx > 0 ? 3 : 1;
   return fz > 0 ? 0 : 2;
+}
+
+/** The other half of a two-block bed. */
+export function bedPartner(x: number, y: number, z: number, state: number): [number, number, number] {
+  const [dx, , dz] = DIR_VEC[FACING_DIR[state & 3]];
+  return state & BED_HEAD ? [x - dx, y, z - dz] : [x + dx, y, z + dz];
 }
 
 /** Facing in the direction the player looks. */
@@ -48,6 +54,12 @@ export function placementRaw(block: number, nx: number, ny: number, nz: number, 
       return withState(block, facingTowards(yaw));
     case B.ASHWOOD_DOOR:
       return withState(block, facingAway(yaw));
+    case B.BEDROLL:
+      // The foot goes where the player clicks, the head one block further in the looking direction.
+      return withState(block, facingAway(yaw) | BED_PAIRED);
+    case B.ASHWOOD_LEAVES:
+    case B.FROSTPINE_NEEDLES:
+      return withState(block, LEAVES_PLACED);
     default:
       return block;
   }
@@ -76,7 +88,15 @@ export function isSupported(get: RawGetter, x: number, y: number, z: number, raw
   if (RENDER[id] === 2) return OPAQUE[below()] === 1;
   if (id === B.CACTUS) {
     const b = below();
-    return b === B.SAND || b === B.CACTUS;
+    if (b !== B.SAND && b !== B.CACTUS) return false;
+    // Anything solid right beside a cactus breaks it.
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (SOLID[get(x + dx, y, z + dz) & 0xfff]) return false;
+    return true;
+  }
+  if (id === B.BEDROLL && state & BED_PAIRED) {
+    const [px, py, pz] = bedPartner(x, y, z, state);
+    const other = get(px, py, pz);
+    return (other & 0xfff) === B.BEDROLL && (other >>> 12) === (state ^ BED_HEAD);
   }
   if (id === B.TORCH) {
     const [dx, dy, dz] = TORCH_WALL[state] ?? TORCH_WALL[0];

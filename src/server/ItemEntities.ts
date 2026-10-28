@@ -147,6 +147,11 @@ export class ItemEntities {
     if (moved.length > 0) this.events.moved(moved);
   }
 
+  /** Removes an item without anyone picking it up (burnt by a cactus). */
+  destroy(e: ItemEntity): void {
+    this.remove(e);
+  }
+
   private remove(e: ItemEntity, pickedBy?: number): void {
     if (!this.all.delete(e.id)) return;
     this.events.despawned(e, pickedBy);

@@ -38,7 +38,8 @@ describe('greedy mesher', () => {
     const out = buildChunkMesh(v);
     // Two adjacent stones merge into one 2×1 box: 6 quads.
     expect(quads(out.opaque)).toBe(6);
-    expect(quads(out.translucent)).toBe(6);
+    // Water is meshed per cell (sloped surfaces): 2 tops, 2 bottoms and the 6 outer sides.
+    expect(quads(out.translucent)).toBe(10);
   });
 
   it('meshes plants as double-sided crosses', () => {

@@ -1,8 +1,8 @@
-import { B, DIR_VEC, DOOR_OPEN, DOOR_UPPER, OPAQUE, POWER_ON, RENDER, REPLACEABLE, SOLID, withState } from '../shared/blocks/registry';
+import { B, BED_HEAD, BED_PAIRED, DIR_VEC, DOOR_OPEN, DOOR_UPPER, FALLING_BLOCKS, OPAQUE, POWER_ON, RENDER, LEAVES_PLACED, REPLACEABLE, SOLID, withState } from '../shared/blocks/registry';
 import { isInteractive } from '../shared/blocks/placement';
 import { runeLevel, RUNE_BOUNTY, RUNE_ENDURE, RUNE_KEEN, RUNE_SWIFT } from '../shared/items/runes';
 import { isPowerBlock, isSignalBlock, PowerGrid } from './power';
-import { isSupported } from '../shared/blocks/placement';
+import { bedPartner, isSupported } from '../shared/blocks/placement';
 import { DAY_LENGTH_TICKS, GameMode, MAX_PLAYERS, PROTOCOL_VERSION, SEA_LEVEL, TICK_MS } from '../shared/constants';
 import { DEEP_ORIGIN, isDeep } from '../shared/world/dimensions';
 import { SMELT_TICKS, SMELTING } from '../shared/items/crafting';
@@ -18,6 +18,8 @@ import type { BlockEntity } from '../shared/world/blockEntities';
 import { Chunk, chunkKey, idx } from '../shared/world/Chunk';
 import type { Transport } from '../net/Transport';
 import { ItemEntities } from './ItemEntities';
+import { canLandIn, FallingBlocks } from './FallingBlocks';
+import { WaterSim } from './water';
 import { settlementsTouching } from './worldgen/settlements';
 import { TRADES, type Trade } from '../shared/entities/trades';
 import { MobManager, type MobTarget } from './mobs/MobManager';
@@ -45,6 +47,12 @@ const AUTOSAVE_TICKS = 30 * 20;
 const REACH_SLACK = 1.5;
 const TIME_TOLERANCE = 0.7;
 const RANDOM_TICKS_PER_SECTION = 3;
+/** The changed cell and its six neighbours (what a block change can affect). */
+const SELF_AND_NEIGHBOURS: ReadonlyArray<readonly [number, number, number]> = [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+const isLeaves = (id: number) => id === B.ASHWOOD_LEAVES || id === B.FROSTPINE_NEEDLES;
+const isLog = (id: number) => id === B.ASHWOOD_LOG || id === B.FROSTPINE_LOG;
+/** Leaves further than this from a log (through other leaves) decay. */
+const LEAF_REACH = 6;
 const NIGHT_START = 12500;
 const NIGHT_END = 23500;
 
@@ -56,6 +64,7 @@ const DEATH_MESSAGES: Record<string, string> = {
   thorn: 'נדקרת מקוץ של קוצן',
   spores: 'נחנקת בענן נבגים של פטריון',
   magma: 'נשרפת במאגמה',
+  cactus: 'נדקרת למוות מקקטוס',
 };
 
 function deathMessage(cause: string): string {
@@ -89,6 +98,12 @@ export class GameServer {
   readonly spawn: Vec3;
   readonly meta: WorldMeta;
   readonly items: ItemEntities;
+  readonly falling: FallingBlocks;
+  readonly water: WaterSim;
+  /** Cells changed since the last tick ("x,y,z"); their neighbourhoods get checked (support, falling, water, leaves). */
+  private readonly updates = new Set<string>();
+  /** Natural leaves to check for decay, by "x,y,z" → due tick. */
+  private readonly leafChecks = new Map<string, number>();
   readonly mobs: MobManager;
   /** Spawning can be switched off (tests, peaceful worlds later). */
   mobSpawning = true;
@@ -166,6 +181,35 @@ export class GameServer {
           }
           if (data.length > 0) p.send({ t: 'entityMove', data });
         }
+      },
+    });
+    this.falling = new FallingBlocks(this.world, allocId, {
+      spawned: (e) => this.toChunkViewers(e.x, e.z, { t: 'entitySpawn', entity: FallingBlocks.info(e) }),
+      moved: (list) => {
+        for (const p of this.players.values()) {
+          const data: number[] = [];
+          for (const e of list) if (p.sent.has(chunkKey(Math.floor(e.x) >> 4, Math.floor(e.z) >> 4))) data.push(e.id, e.x, e.y, e.z);
+          if (data.length > 0) p.send({ t: 'entityMove', data });
+        }
+      },
+      landed: (e, x, y, z) => {
+        this.broadcast({ t: 'entityDespawn', id: e.id });
+        const here = this.world.getBlock(x, y, z);
+        if (canLandIn(here)) {
+          if (here !== B.AIR && here !== B.WATER) this.items.spawnDrops(blockDrops(this.world.getRaw(x, y, z), undefined, Math.random), x, y, z);
+          this.setBlockAndBroadcast(x, y, z, e.raw);
+        } else {
+          this.items.spawnDrops([{ id: e.raw & 0xfff, count: 1 }], x, y, z);
+        }
+      },
+    });
+    this.water = new WaterSim({
+      getRaw: (x, y, z) => this.world.getRaw(x, y, z),
+      setWater: (x, y, z, raw, washed) => {
+        const id = washed & 0xfff;
+        // Plants in the way wash away with their drops.
+        if (washed > 0 && id !== B.WATER && id !== B.AIR) this.items.spawnDrops(blockDrops(washed, undefined, Math.random), x, y, z);
+        this.setBlockAndBroadcast(x, y, z, raw);
       },
     });
   }
@@ -447,6 +491,7 @@ export class GameServer {
     const old = this.world.getRaw(x, y, z);
     if (!this.world.setBlock(x, y, z, raw)) return;
     this.toChunkViewers(x, z, { t: 'blockChange', x, y, z, id: raw });
+    this.updates.add(posKey(x, y, z));
     if (this.inPower === 0 && this.nearPower(x, y, z, old, raw)) {
       this.inPower++;
       try {
@@ -514,6 +559,17 @@ export class GameServer {
       if (p.onGround && !onGround && y > oy) p.addExhaustion(sprint ? 0.2 : 0.05);
     }
     const inWater = this.world.getBlock(Math.floor(x), Math.floor(y + 0.2), Math.floor(z)) === B.WATER;
+    if (flags & MoveFlag.BOUNCED && !p.creative && !p.flying) {
+      // Landing on a bed halves the fall; the bounce starts a new one.
+      for (let d = 0; d <= 3; d++) {
+        const by = Math.floor(y) - d;
+        if (this.world.getBlock(Math.floor(x), by, Math.floor(z)) !== B.BEDROLL) continue;
+        const fall = Math.max(p.fallStartY, oy) - (by + 9 / 16);
+        if (fall > 7) this.damage(p, Math.floor(fall / 2 - 3), 'fall');
+        p.fallStartY = y;
+        break;
+      }
+    }
     if (p.flying || p.creative || inWater) p.fallStartY = y;
     else if (!onGround) p.fallStartY = p.onGround ? Math.max(oy, y) : Math.max(p.fallStartY, y);
     else {
@@ -803,6 +859,8 @@ export class GameServer {
       else if (id === B.PUSHER) ok = state <= 5;
       else if (id === B.FURNACE || id === B.CHEST) ok = state <= 3;
       else if (door) ok = state <= 3;
+      else if (id === B.BEDROLL) ok = (state & ~3) === BED_PAIRED;
+      else if (id === B.ASHWOOD_LEAVES || id === B.FROSTPINE_NEEDLES) ok = state === LEAVES_PLACED;
       else ok = state === 0;
     }
     if (ok) {
@@ -813,9 +871,13 @@ export class GameServer {
       });
     }
     const get = (a: number, b: number, c: number) => this.world.getRaw(a, b, c);
+    const bedHead = id === B.BEDROLL ? bedPartner(x, y, z, state) : null;
     if (ok && door) {
       const above = this.world.getBlock(x, y + 1, z);
       ok = OPAQUE[this.world.getBlock(x, y - 1, z) & 0xfff] === 1 && above >= 0 && REPLACEABLE[above] === 1;
+    } else if (ok && bedHead) {
+      const head = this.world.getBlock(...bedHead);
+      ok = head >= 0 && REPLACEABLE[head] === 1 && SOLID[this.world.getBlock(x, y - 1, z)] === 1 && SOLID[this.world.getBlock(bedHead[0], y - 1, bedHead[2])] === 1;
     } else if (ok) {
       ok = isSupported(get, x, y, z, raw);
     }
@@ -825,15 +887,17 @@ export class GameServer {
         if (!q.alive) continue;
         const min = [q.pos[0] - h, q.pos[1], q.pos[2] - h];
         const max = [q.pos[0] + h, q.pos[1] + PLAYER_HEIGHT, q.pos[2] + h];
-        if (boxOverlapsBlock(min, max, x, y, z) || (door && boxOverlapsBlock(min, max, x, y + 1, z))) ok = false;
+        if (boxOverlapsBlock(min, max, x, y, z) || (door && boxOverlapsBlock(min, max, x, y + 1, z)) || (bedHead && boxOverlapsBlock(min, max, ...bedHead))) ok = false;
       }
     }
     if (!ok) {
       this.revert(p, x, y, z);
       if (door) this.revert(p, x, y + 1, z);
+      if (bedHead) this.revert(p, ...bedHead);
       p.sendInventory();
       return;
     }
+    if (bedHead) this.setBlockAndBroadcast(...bedHead, withState(id, state | BED_HEAD));
     this.setBlockAndBroadcast(x, y, z, raw);
     if (door) this.setBlockAndBroadcast(x, y + 1, z, withState(id, state | DOOR_UPPER));
     if (!p.creative) {
@@ -1006,6 +1070,10 @@ export class GameServer {
   }
 
   private sleep(p: PlayerSession, x: number, y: number, z: number): void {
+    if (Math.hypot(p.pos[0] - (x + 0.5), p.pos[2] - (z + 0.5)) > 3 || Math.abs(p.pos[1] - y) > 2.5) {
+      this.chat(p, 'צריך להתקרב למיטה כדי לישון בה.');
+      return;
+    }
     if (isDeep(x)) {
       this.chat(p, 'בעמקי הגחלים אין יום ולילה, ושק השינה לא נדלק כאן.');
       return;
@@ -1016,7 +1084,7 @@ export class GameServer {
       this.chat(p, 'נקודת הלידה נקבעה כאן. אפשר לישון רק בלילה.');
       return;
     }
-    if (this.mobs.hostilesNear(p.pos[0], p.pos[1], p.pos[2], 10) > 0) {
+    if (this.mobs.hostilesAround(x + 0.5, y, z + 0.5, 8, 5) > 0) {
       this.chat(p, 'אי אפשר לישון כשיצורים עוינים בקרבת מקום.');
       return;
     }
@@ -1303,9 +1371,18 @@ export class GameServer {
           const lz = (Math.random() * 16) | 0;
           if (ly >= 255) continue;
           const id = c.blocks[idx(lx, ly, lz)] & 0xfff;
-          if (id !== B.DIRT && id !== B.GRASS && id !== B.ASHWOOD_SAPLING && id !== B.FROSTPINE_SAPLING && id !== B.SUNWHEAT && id !== B.FARMLAND) continue;
+          if (id !== B.DIRT && id !== B.GRASS && id !== B.ASHWOOD_SAPLING && id !== B.FROSTPINE_SAPLING && id !== B.SUNWHEAT && id !== B.FARMLAND && id !== B.CACTUS && id !== B.WATER) continue;
           const x = c.cx * 16 + lx;
           const z = c.cz * 16 + lz;
+          if (id === B.WATER) {
+            // Flowing water left over (e.g. from before a reload) settles again.
+            if (c.blocks[idx(lx, ly, lz)] >>> 12) this.water.schedule(x, ly, z, this.tickCount);
+            continue;
+          }
+          if (id === B.CACTUS) {
+            this.growCactus(x, ly, z, c.blocks[idx(lx, ly, lz)] >>> 12);
+            continue;
+          }
           if (id === B.SUNWHEAT) {
             const stage = c.blocks[idx(lx, ly, lz)] >>> 12;
             const wet = (c.blocks[idx(lx, ly - 1, lz)] >>> 12) & 1;
@@ -1332,6 +1409,127 @@ export class GameServer {
           }
         }
       }
+    }
+  }
+
+  /** Cactus: every 16 random ticks it grows one block, up to 3 tall. The age isn't sent to clients. */
+  private growCactus(x: number, y: number, z: number, age: number): void {
+    if (this.world.getBlock(x, y + 1, z) !== B.AIR) return;
+    let height = 1;
+    while (height < 3 && this.world.getBlock(x, y - height, z) === B.CACTUS) height++;
+    if (height >= 3) return;
+    if (age < 15) {
+      this.world.setBlock(x, y, z, withState(B.CACTUS, age + 1));
+      return;
+    }
+    this.world.setBlock(x, y, z, B.CACTUS);
+    this.setBlockAndBroadcast(x, y + 1, z, B.CACTUS);
+  }
+
+  /** Neighbourhoods of changed cells: pop unsupported blocks, drop sand and gravel, wake water and leaves. */
+  private processUpdates(): void {
+    if (this.updates.size === 0) return;
+    const keys = [...this.updates].slice(0, 4096);
+    for (const k of keys) this.updates.delete(k);
+    const get = (a: number, b: number, c: number) => this.world.getRaw(a, b, c);
+    const seen = new Set<string>();
+    for (const key of keys) {
+      const [x, y, z] = key.split(',').map(Number);
+      for (const [dx, dy, dz] of SELF_AND_NEIGHBOURS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        const nz = z + dz;
+        const nk = posKey(nx, ny, nz);
+        if (seen.has(nk)) continue;
+        seen.add(nk);
+        const raw = get(nx, ny, nz);
+        if (raw <= 0) continue;
+        const id = raw & 0xfff;
+        if (id === B.WATER) {
+          this.water.schedule(nx, ny, nz, this.tickCount);
+          continue;
+        }
+        if (!isSupported(get, nx, ny, nz, raw)) {
+          this.setBlockAndBroadcast(nx, ny, nz, B.AIR);
+          this.items.spawnDrops(blockDrops(raw, undefined, Math.random), nx, ny, nz);
+          continue;
+        }
+        if (FALLING_BLOCKS.has(id) && ny > 0 && canLandIn(this.world.getBlock(nx, ny - 1, nz))) {
+          this.setBlockAndBroadcast(nx, ny, nz, B.AIR);
+          this.falling.spawn(raw, nx, ny, nz);
+          continue;
+        }
+        if (isLeaves(id) && !((raw >>> 12) & LEAVES_PLACED) && !this.leafChecks.has(nk)) {
+          // Decay is spread out over a few seconds so a felled tree thins out gradually.
+          this.leafChecks.set(nk, this.tickCount + 20 + Math.floor(Math.random() * 200));
+        }
+      }
+    }
+  }
+
+  private tickLeaves(): void {
+    let budget = 64;
+    for (const [key, due] of this.leafChecks) {
+      if (due > this.tickCount) continue;
+      if (budget-- <= 0) break;
+      this.leafChecks.delete(key);
+      const [x, y, z] = key.split(',').map(Number);
+      const raw = this.world.getRaw(x, y, z);
+      if (!isLeaves(raw & 0xfff) || (raw >>> 12) & LEAVES_PLACED || this.leafHeld(x, y, z)) continue;
+      this.setBlockAndBroadcast(x, y, z, B.AIR);
+      const drops = blockDrops(raw, undefined, Math.random);
+      if (Math.random() < 0.02) drops.push({ id: I.STICK, count: 1 });
+      this.items.spawnDrops(drops, x, y, z);
+    }
+  }
+
+  /** True if a log is within LEAF_REACH steps through leaves (unloaded chunks count as holding). */
+  private leafHeld(x: number, y: number, z: number): boolean {
+    const seen = new Set<string>([posKey(x, y, z)]);
+    let frontier: Vec3[] = [[x, y, z]];
+    for (let d = 1; d <= LEAF_REACH && frontier.length > 0; d++) {
+      const next: Vec3[] = [];
+      for (const [cx, cy, cz] of frontier) {
+        for (const [dx, dy, dz] of DIR_VEC) {
+          const k = posKey(cx + dx, cy + dy, cz + dz);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          const id = this.world.getBlock(cx + dx, cy + dy, cz + dz);
+          if (id < 0 || isLog(id)) return true;
+          if (isLeaves(id)) next.push([cx + dx, cy + dy, cz + dz]);
+        }
+      }
+      frontier = next;
+    }
+    return false;
+  }
+
+  /** True if an axis-aligned box overlaps a cactus cell. */
+  private touchesCactus(min: readonly number[], max: readonly number[]): boolean {
+    for (let y = Math.floor(min[1]); y <= Math.floor(max[1] - 1e-6); y++) {
+      for (let z = Math.floor(min[2]); z <= Math.floor(max[2] - 1e-6); z++) {
+        for (let x = Math.floor(min[0]); x <= Math.floor(max[0] - 1e-6); x++) {
+          if (this.world.getBlock(x, y, z) === B.CACTUS) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** Cactus spines: half a heart every half second to whoever touches one; dropped items burn up. */
+  private tickCactus(): void {
+    if (this.tickCount % 10 === 0) {
+      const h = PLAYER_WIDTH / 2 + 0.01;
+      for (const p of this.players.values()) {
+        if (!p.joined || !p.alive || p.creative) continue;
+        const [x, y, z] = p.pos;
+        if (this.touchesCactus([x - h, y - 0.01, z - h], [x + h, y + PLAYER_HEIGHT, z + h])) this.damage(p, 1, 'cactus');
+      }
+      this.mobs.hurtWhere((min, max) => this.touchesCactus(min, max), 1);
+    }
+    for (const e of this.items.all.values()) {
+      const s = 0.13;
+      if (this.touchesCactus([e.x - s, e.y - 0.01, e.z - s], [e.x + s, e.y + 0.25, e.z + s])) this.items.destroy(e);
     }
   }
 
@@ -1398,6 +1596,11 @@ export class GameServer {
     if (this.mobSpawning && this.tickCount % 20 === 0) this.mobs.spawnTick(targets, this.time);
     this.tickFurnaces();
     this.tickPower();
+    this.processUpdates();
+    this.water.tick(this.tickCount);
+    this.falling.tick();
+    this.tickLeaves();
+    this.tickCactus();
     this.randomTicks();
     if (this.tickCount % 100 === 0) this.unloadFarChunks();
     if (this.tickCount % AUTOSAVE_TICKS === 0) void this.save();

@@ -1,4 +1,5 @@
 import { blockShape, CULL_SAME, faceLayer, OPAQUE, RENDER, TRANSLUCENT } from '../blocks/registry';
+import { waterHeightPx } from '../world/fluid';
 
 // Greedy mesher for one chunk. Input is a padded volume: the chunk plus a one-block
 // ring of its neighbours, so faces and smooth lighting at the edges are correct.
@@ -101,7 +102,6 @@ const V_AXIS = [1, 1, 2, 2, 1, 1];
 const SHADE = [204, 204, 255, 140, 166, 166];
 // Sign of (u × v)·axis; together with SIGN it decides triangle winding.
 const CROSS = [-1, -1, -1, -1, 1, 1];
-const WATER_DROP = 2; // water surface sits 2/16 below the block top
 
 /** Builds the mesh for the chunk in the middle of the padded volume. */
 export function buildChunkMesh(input: MeshInput): MeshOutput {
@@ -131,7 +131,7 @@ export function buildChunkMesh(input: MeshInput): MeshOutput {
 
   const emitQuad = (
     dir: number, w: number, u0: number, v0: number, u1: number, v1: number,
-    layer: number, mesh: number, waterTop: boolean,
+    layer: number, mesh: number, drop: number,
   ): void => {
     const b = builders[mesh];
     const axis = AXIS[dir];
@@ -146,9 +146,10 @@ export function buildChunkMesh(input: MeshInput): MeshOutput {
       p[axis] = plane;
       p[ua] = uc * 16;
       p[va] = vc * 16;
-      if (waterTop) {
-        if (axis === 1) p[1] -= WATER_DROP;
-        else if (vc === v1) p[1] -= WATER_DROP;
+      // Liquid surfaces sit below the block top by their level (flowing water is lower).
+      if (drop) {
+        if (dir === 2) p[1] -= drop;
+        else if (axis !== 1 && vc === v1) p[1] -= drop;
       }
       b.vertex(p[0], p[1], p[2], (uc - u0) * 16, (vc - v0) * 16, layer, SHADE[dir], cSky[k], cBlk[k], cAo[k]);
     }
@@ -188,7 +189,7 @@ export function buildChunkMesh(input: MeshInput): MeshOutput {
           const raw = blocks[paddedIndex(x, y, z)];
           const id = raw & 0xfff;
           const r = RENDER[id];
-          if (r !== 1 && r !== 3) continue;
+          if (r !== 1) continue;
           n[0] = x; n[1] = y; n[2] = z;
           n[axis] += sign;
           const nid = blockAt(n[0], n[1], n[2]);
@@ -200,7 +201,7 @@ export function buildChunkMesh(input: MeshInput): MeshOutput {
           if (CULL_SAME[id] && nid === id) continue;
           const mesh = translucent ? 1 : 0;
           const layer = faceLayer(raw, dir);
-          const waterTop = r === 3 && blockAt(x, y + 1, z) !== id;
+          const drop = 0;
 
           let uniform: boolean;
           if (translucent) {
@@ -240,9 +241,9 @@ export function buildChunkMesh(input: MeshInput): MeshOutput {
           if (y > maxY) maxY = y;
           if (uniform) {
             mask[u + v * du] =
-              1 + layer + (cSky[0] << 8) + (cBlk[0] << 12) + (cAo[0] << 16) + (mesh << 18) + ((waterTop ? 1 : 0) << 19);
+              1 + layer + (cSky[0] << 8) + (cBlk[0] << 12) + (cAo[0] << 16) + (mesh << 18) + (drop << 19);
           } else {
-            emitQuad(dir, w, u, v, u + 1, v + 1, layer, mesh, waterTop);
+            emitQuad(dir, w, u, v, u + 1, v + 1, layer, mesh, drop);
           }
         }
       }
@@ -266,8 +267,88 @@ export function buildChunkMesh(input: MeshInput): MeshOutput {
           const blk = (packed >> 12) & 15;
           const ao = (packed >> 16) & 3;
           for (let k = 0; k < 4; k++) { cSky[k] = sky; cBlk[k] = blk; cAo[k] = ao; }
-          emitQuad(dir, w, u, v, u + width, v + h, layer, (packed >> 18) & 1, ((packed >> 19) & 1) === 1);
+          emitQuad(dir, w, u, v, u + width, v + h, layer, (packed >> 18) & 1, (packed >> 19) & 15);
           u += width;
+        }
+      }
+    }
+  }
+
+  // Liquids: per cell, with the surface height at each corner averaged over the four cells that
+  // share it (sources count most), so flowing water slopes smoothly from level to level.
+  const rawAt = (x: number, y: number, z: number): number => (y < 0 || y >= height ? 0 : blocks[paddedIndex(x, y, z)]);
+  const cornerHeight = (id: number, x: number, y: number, z: number, cx: number, cz: number): number => {
+    let sum = 0;
+    let weight = 0;
+    for (const [ox, oz] of [[cx - 1, cz - 1], [cx, cz - 1], [cx - 1, cz], [cx, cz]]) {
+      if (ox < -1 || ox > 16 || oz < -1 || oz > 16) continue;
+      if (blockAt(ox, y + 1, oz) === id) return 16;
+      const r = rawAt(ox, y, oz);
+      if ((r & 0xfff) === id) {
+        const h = waterHeightPx(r >>> 12, false);
+        const w = r >>> 12 === 0 ? 10 : 1;
+        sum += h * w;
+        weight += w;
+      } else if (!OPAQUE[r & 0xfff]) {
+        weight += 1; // an open cell beside the water pulls the edge down
+      }
+    }
+    void x; void z;
+    return weight > 0 ? sum / weight : 16;
+  };
+  const tb = builders[1];
+  const quad = (pts: number[][], uv: number[][], layer: number, shade: number, l: number, flip: boolean): void => {
+    const base = tb.verts;
+    for (let k = 0; k < 4; k++) tb.vertex(pts[k][0], pts[k][1], pts[k][2], uv[k][0], uv[k][1], layer, shade, l >> 4, l & 15, 3);
+    if (flip) {
+      tb.tri(base, base + 2, base + 1);
+      tb.tri(base, base + 3, base + 2);
+    } else {
+      tb.tri(base, base + 1, base + 2);
+      tb.tri(base, base + 2, base + 3);
+    }
+  };
+  for (let y = 0; y < meshH; y++) {
+    for (let z = 0; z < 16; z++) {
+      for (let x = 0; x < 16; x++) {
+        const raw = blocks[paddedIndex(x, y, z)];
+        const id = raw & 0xfff;
+        if (RENDER[id] !== 3) continue;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        const covered = blockAt(x, y + 1, z) === id;
+        // Corner heights (px above the cell bottom) at (x,z), (x+1,z), (x+1,z+1), (x,z+1).
+        const h00 = covered ? 16 : cornerHeight(id, x, y, z, x, z);
+        const h10 = covered ? 16 : cornerHeight(id, x, y, z, x + 1, z);
+        const h11 = covered ? 16 : cornerHeight(id, x, y, z, x + 1, z + 1);
+        const h01 = covered ? 16 : cornerHeight(id, x, y, z, x, z + 1);
+        const X = x * 16;
+        const Y = y * 16;
+        const Z = z * 16;
+        // Top surface.
+        const above = blockAt(x, y + 1, z);
+        if (!covered && !OPAQUE[above]) {
+          quad([[X, Y + h00, Z], [X, Y + h01, Z + 16], [X + 16, Y + h11, Z + 16], [X + 16, Y + h10, Z]],
+            [[0, 0], [0, 16], [16, 16], [16, 0]], faceLayer(raw, 2), SHADE[2], lightAt(x, y + 1, z), false);
+        }
+        // Bottom.
+        const below = blockAt(x, y - 1, z);
+        if (below !== id && !OPAQUE[below] && !TRANSLUCENT[below]) {
+          quad([[X, Y, Z], [X + 16, Y, Z], [X + 16, Y, Z + 16], [X, Y, Z + 16]],
+            [[0, 0], [16, 0], [16, 16], [0, 16]], faceLayer(raw, 3), SHADE[3], lightAt(x, y - 1, z), false);
+        }
+        // Sides: only towards open cells (neighbouring water shares the corner heights).
+        const sides: Array<[number, number, number, number[][], number[]]> = [
+          [0, 1, 0, [[X + 16, Z], [X + 16, Z + 16]], [h10, h11]],
+          [1, -1, 0, [[X, Z + 16], [X, Z]], [h01, h00]],
+          [4, 0, 1, [[X + 16, Z + 16], [X, Z + 16]], [h11, h01]],
+          [5, 0, -1, [[X, Z], [X + 16, Z]], [h00, h10]],
+        ];
+        for (const [dir, dx, dz, [a, b], [ha, hb]] of sides) {
+          const nb = blockAt(x + dx, y, z + dz);
+          if (OPAQUE[nb] || nb === id || TRANSLUCENT[nb]) continue;
+          quad([[a[0], Y, a[1]], [b[0], Y, b[1]], [b[0], Y + hb, b[1]], [a[0], Y + ha, a[1]]],
+            [[0, 0], [16, 0], [16, hb], [0, ha]], faceLayer(raw, dir), SHADE[dir], lightAt(x + dx, y, z + dz), true);
         }
       }
     }
@@ -326,7 +407,8 @@ export function buildChunkMesh(input: MeshInput): MeshOutput {
             if (planePx === 0 || planePx === 16) {
               n[0] = x; n[1] = y; n[2] = z;
               n[axis] += sign;
-              if (OPAQUE[blockAt(n[0], n[1], n[2])]) continue;
+              const nb = blockAt(n[0], n[1], n[2]);
+              if (OPAQUE[nb] || nb === (raw & 0xfff)) continue;
             }
             const layer = faceLayer(raw, dir);
             const base = ob.verts;

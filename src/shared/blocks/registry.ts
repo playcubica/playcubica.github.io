@@ -19,6 +19,8 @@ export interface BlockDef {
   alt?: string;
   /** Shape for 'box' blocks, by state. Also used for collision when solid. */
   shape?: (state: number) => PxBox[];
+  /** Collision boxes when they differ from the shape (cactus: a little lower, so touching is possible). */
+  collision?: (state: number) => PxBox[];
   /** Texture name by state and face (overrides tex/front/alt), for growth stages, on/off, facing. */
   texFn?: (state: number, dir: number) => string;
   /** Every texture name texFn can return (so they get array layers). */
@@ -119,6 +121,16 @@ export const FACING_DIR = [4, 1, 5, 0];
 export const DOOR_OPEN = 4;
 export const DOOR_UPPER = 8;
 
+/** Bed state: bits 0-1 facing (the way the head points), bit 2 head half, bit 3 two-block bed (older beds are one block). */
+export const BED_HEAD = 4;
+export const BED_PAIRED = 8;
+/** Leaves state: placed by a player (never decays). */
+export const LEAVES_PLACED = 1;
+/** Water state: 0 source, 1..7 flowing (lower each step), bit 3 falling. */
+export const WATER_FALLING = 8;
+/** Sand and gravel fall when nothing holds them up. */
+export const FALLING_BLOCKS: ReadonlySet<number> = new Set([B.SAND, B.GRAVEL]);
+
 /** Torch state: 0 standing, 1..4 on a wall towards -x, +x, -z, +z. */
 export const TORCH_WALL: ReadonlyArray<readonly [number, number, number]> = [[0, -1, 0], [-1, 0, 0], [1, 0, 0], [0, 0, -1], [0, 0, 1]];
 
@@ -176,6 +188,7 @@ function def(id: number, key: string, name: string, props: Props = {}): void {
     front: props.front,
     alt: props.alt,
     shape: props.shape,
+    collision: props.collision,
     texFn: props.texFn,
     extraTex: props.extraTex,
     opaque: props.opaque ?? true,
@@ -217,7 +230,12 @@ def(B.ASHWOOD_LOG, 'ashwood_log', 'Ashwood Log', log('ashwood'));
 def(B.ASHWOOD_LEAVES, 'ashwood_leaves', 'Ashwood Leaves', leaves);
 def(B.FROSTPINE_LOG, 'frostpine_log', 'Frostpine Log', log('frostpine'));
 def(B.FROSTPINE_NEEDLES, 'frostpine_needles', 'Frostpine Needles', leaves);
-def(B.CACTUS, 'cactus', 'Cactus', { tex: { top: 'cactus_top', bottom: 'cactus_top', side: 'cactus_side' }, hardness: 0.4 });
+// State: growth age 0..15. Slimmer than a block; the collision box stops 1px short of the top so
+// standing on it still counts as touching.
+def(B.CACTUS, 'cactus', 'Cactus', {
+  render: 'box', opaque: false, tex: { top: 'cactus_top', bottom: 'cactus_top', side: 'cactus_side' }, hardness: 0.4,
+  shape: () => [[1, 0, 1, 15, 16, 15]], collision: () => [[1, 0, 1, 15, 15, 15]],
+});
 def(B.COAL_ORE, 'coal_ore', 'Coal Ore', stoneLike(3));
 def(B.IRON_ORE, 'iron_ore', 'Iron Ore', { ...stoneLike(3), harvest: 2 });
 def(B.GOLD_ORE, 'gold_ore', 'Gold Ore', { ...stoneLike(3), harvest: 3 });
@@ -244,6 +262,8 @@ def(B.CHEST, 'chest', 'Chest', {
 def(B.BEDROLL, 'bedroll', 'Bedroll', {
   render: 'box', opaque: false, tex: { top: 'bedroll_top', bottom: 'ashwood_planks', side: 'bedroll_side' },
   shape: () => [[0, 0, 0, 16, 9, 16]], hardness: 0.2,
+  texFn: (s, d) => (d === 3 ? 'ashwood_planks' : d !== 2 ? 'bedroll_side' : !(s & BED_PAIRED) ? 'bedroll_top' : s & BED_HEAD ? 'bedroll_head' : 'bedroll_foot'),
+  extraTex: ['bedroll_head', 'bedroll_foot'],
 });
 def(B.TORCH, 'torch', 'Torch', {
   render: 'box', opaque: false, solid: false, lightEmit: 14, hardness: 0, shape: (s) => [TORCH_BOXES[s] ?? TORCH_BOXES[0]],
@@ -398,7 +418,8 @@ export function collisionBoxes(raw: number): readonly number[] | null {
   if (RENDER[id] !== 4) return FULL;
   let c = collisionCache.get(raw);
   if (c === undefined) {
-    c = blockShape(raw).flatMap((b) => b.map((v) => v / 16));
+    const own = defs[id]?.collision?.(raw >>> 12);
+    c = (own ?? blockShape(raw)).flatMap((b) => b.map((v) => v / 16));
     collisionCache.set(raw, c);
   }
   return c;

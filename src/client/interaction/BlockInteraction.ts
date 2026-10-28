@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { B, DOOR_OPEN, DOOR_UPPER, POWER_ON, OPAQUE, RENDER, REPLACEABLE, SOLID, withState } from '../../shared/blocks/registry';
-import { isInteractive, isSupported, placementRaw } from '../../shared/blocks/placement';
+import { B, BED_HEAD, DOOR_OPEN, DOOR_UPPER, POWER_ON, OPAQUE, RENDER, REPLACEABLE, SOLID, withState } from '../../shared/blocks/registry';
+import { bedPartner, isInteractive, isSupported, placementRaw } from '../../shared/blocks/placement';
 import type { Inventory } from '../../shared/items/Inventory';
 import { breakTime, CREATIVE_BREAK_DELAY, EAT_TIME, REACH } from '../../shared/items/mining';
 import { PLAYER_ATTACK_COOLDOWN, PLAYER_ATTACK_REACH } from '../../shared/entities/mobs';
@@ -280,18 +280,23 @@ export class BlockInteraction {
     const current = w.getBlock(x, y, z);
     if (!REPLACEABLE[current] || current === block) return;
     const door = block === B.ASHWOOD_DOOR;
+    // Second cell of two-block blocks: the door's upper half, the bed's head.
+    const second: [number, number, number] | null = door ? [x, y + 1, z] : block === B.BEDROLL ? bedPartner(x, y, z, raw >>> 12) : null;
     if (door) {
       if (!OPAQUE[w.getBlock(x, y - 1, z)] || !REPLACEABLE[w.getBlock(x, y + 1, z)]) return;
+    } else if (second) {
+      if (!REPLACEABLE[w.getBlock(...second)] || !SOLID[w.getBlock(x, y - 1, z)] || !SOLID[w.getBlock(second[0], y - 1, second[2])]) return;
     } else if (!isSupported((a, b, c) => w.getRaw(a, b, c), x, y, z, raw)) {
       return;
     }
     if (SOLID[block]) {
       const { min, max } = h.playerBox();
-      if (boxOverlapsBlock(min, max, x, y, z) || (door && boxOverlapsBlock(min, max, x, y + 1, z))) return;
+      if (boxOverlapsBlock(min, max, x, y, z) || (second && boxOverlapsBlock(min, max, ...second))) return;
     }
     h.send({ t: 'place', x, y, z, raw, slot: h.inventory.selected });
     h.predictBlock(x, y, z, raw);
     if (door) h.predictBlock(x, y + 1, z, withState(block, (raw >>> 12) | DOOR_UPPER));
+    else if (second) h.predictBlock(...second, raw ^ (BED_HEAD << 12));
     if (!h.creative) h.inventory.take(h.inventory.selected, 1);
   }
 

@@ -88,6 +88,7 @@ export class MobManager {
     this.query = {
       boxes: (x, y, z) => world.boxes(x, y, z),
       isWater: (x, y, z) => world.getBlock(x, y, z) === B.WATER,
+      getRaw: (x, y, z) => world.getRaw(x, y, z),
     };
     this.pathWorld = {
       blocked: (x, y, z) => world.boxes(x, y, z) !== null,
@@ -153,6 +154,15 @@ export class MobManager {
     return n;
   }
 
+  /** Hostile creatures within `h` blocks horizontally and `v` vertically (the bed's sleep check). */
+  hostilesAround(x: number, y: number, z: number, h: number, v: number): number {
+    let n = 0;
+    for (const m of this.mobs.values()) {
+      if (m.def.hostile && m.deadTicks === 0 && Math.abs(m.body.x - x) <= h && Math.abs(m.body.z - z) <= h && Math.abs(m.body.y - y) <= v) n++;
+    }
+    return n;
+  }
+
   /** A player hit a creature. Returns false if it could not be hurt right now. */
   hit(mobId: number, damage: number, from: readonly number[]): boolean {
     const m = this.mobs.get(mobId);
@@ -174,6 +184,24 @@ export class MobManager {
       m.path = null;
     }
     return true;
+  }
+
+  /** Environmental damage (cactus) to every creature whose box `touches` says yes; no knockback. */
+  hurtWhere(touches: (min: number[], max: number[]) => boolean, damage: number): void {
+    for (const m of this.mobs.values()) {
+      if (m.deadTicks > 0 || m.hurtTicks > 0 || m.def.trader) continue;
+      const b = m.body;
+      const h = b.width / 2 + 0.01;
+      if (!touches([b.x - h, b.y - 0.01, b.z - h], [b.x + h, b.y + b.height, b.z + h])) continue;
+      m.health -= damage;
+      m.hurtTicks = HURT_TICKS;
+      this.events.event(m.id, 'hurt', b.x, b.z);
+      if (m.health <= 0) {
+        m.deadTicks = 1;
+        this.events.event(m.id, 'death', b.x, b.z);
+        this.events.drops(m.def.drops(Math.random), Math.floor(b.x), Math.floor(b.y), Math.floor(b.z));
+      }
+    }
   }
 
   tick(players: MobTarget[], time: number, tickCount: number): void {

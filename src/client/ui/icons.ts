@@ -18,6 +18,17 @@ export function setIconAtlas(canvas: HTMLCanvasElement): void {
   urls.clear();
 }
 
+/** One texture layer as its own 16×16 canvas (for 3D falling blocks). */
+export function tileCanvas(layer: number): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = c.height = TEX_SIZE;
+  if (atlas) {
+    const [sx, sy] = atlasTile(layer);
+    c.getContext('2d')!.drawImage(atlas, sx, sy, TEX_SIZE, TEX_SIZE, 0, 0, TEX_SIZE, TEX_SIZE);
+  }
+  return c;
+}
+
 /** Draws one atlas tile onto the parallelogram origin + u*s + v*t (s, t in 0..1). */
 function face(g: CanvasRenderingContext2D, layer: number, o: [number, number], u: [number, number], v: [number, number], dark: number): void {
   const [sx, sy] = atlasTile(layer);
