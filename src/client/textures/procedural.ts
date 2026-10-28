@@ -1,0 +1,307 @@
+import { hash3i, mulberry32 } from '../../shared/rng';
+
+// Original 16×16 pixel-art textures, painted procedurally from a fixed per-texture
+// seed (so they are identical on every machine). No DOM needed: paints into RGBA arrays.
+
+export const TEX_SIZE = 16;
+
+type RGB = [number, number, number];
+
+export class Pixmap {
+  readonly data = new Uint8ClampedArray(TEX_SIZE * TEX_SIZE * 4);
+
+  set(x: number, y: number, c: RGB, a = 255): void {
+    if (x < 0 || y < 0 || x >= TEX_SIZE || y >= TEX_SIZE) return;
+    const i = (y * TEX_SIZE + x) * 4;
+    this.data[i] = c[0];
+    this.data[i + 1] = c[1];
+    this.data[i + 2] = c[2];
+    this.data[i + 3] = a;
+  }
+
+  get(x: number, y: number): RGB {
+    const i = (y * TEX_SIZE + x) * 4;
+    return [this.data[i], this.data[i + 1], this.data[i + 2]];
+  }
+
+  alpha(x: number, y: number): number {
+    return this.data[(y * TEX_SIZE + x) * 4 + 3];
+  }
+}
+
+type Rand = () => number;
+
+function shade(c: RGB, f: number): RGB {
+  return [c[0] * f, c[1] * f, c[2] * f];
+}
+
+/** Fills with a base colour, jittering brightness per pixel. */
+function speckle(p: Pixmap, r: Rand, base: RGB, variance: number, alpha = 255): void {
+  for (let y = 0; y < TEX_SIZE; y++) {
+    for (let x = 0; x < TEX_SIZE; x++) {
+      p.set(x, y, shade(base, 1 + (r() * 2 - 1) * variance), alpha);
+    }
+  }
+}
+
+/** Scatters small blobs of a colour. */
+function blobs(p: Pixmap, r: Rand, color: RGB, count: number, size: number, variance = 0.1): void {
+  for (let n = 0; n < count; n++) {
+    let x = Math.floor(r() * TEX_SIZE);
+    let y = Math.floor(r() * TEX_SIZE);
+    for (let s = 0; s < size; s++) {
+      p.set(x, y, shade(color, 1 + (r() * 2 - 1) * variance));
+      if (r() < 0.5) x += r() < 0.5 ? -1 : 1;
+      else y += r() < 0.5 ? -1 : 1;
+    }
+  }
+}
+
+const STONE: RGB = [122, 124, 128];
+const DIRT: RGB = [126, 88, 60];
+const GRASS: RGB = [98, 158, 58];
+
+function stone(p: Pixmap, r: Rand): void {
+  speckle(p, r, STONE, 0.07);
+  blobs(p, r, shade(STONE, 0.78), 7, 4, 0.05);
+  blobs(p, r, shade(STONE, 1.12), 5, 3, 0.04);
+}
+
+function dirt(p: Pixmap, r: Rand): void {
+  speckle(p, r, DIRT, 0.1);
+  blobs(p, r, shade(DIRT, 0.72), 8, 2);
+  blobs(p, r, [150, 120, 90], 4, 1);
+}
+
+function ore(color: RGB, accent: RGB) {
+  return (p: Pixmap, r: Rand) => {
+    stone(p, r);
+    for (let n = 0; n < 5; n++) {
+      const cx = 2 + Math.floor(r() * 12);
+      const cy = 2 + Math.floor(r() * 12);
+      p.set(cx, cy, color);
+      p.set(cx + 1, cy, shade(color, 0.85));
+      p.set(cx, cy + 1, shade(color, 0.75));
+      if (r() < 0.6) p.set(cx + 1, cy + 1, accent);
+      if (r() < 0.4) p.set(cx - 1, cy, shade(color, 0.9));
+    }
+  };
+}
+
+function plantBase(p: Pixmap): void {
+  for (let i = 0; i < TEX_SIZE * TEX_SIZE; i++) p.data[i * 4 + 3] = 0;
+}
+
+function stem(p: Pixmap, x: number, top: number, color: RGB): void {
+  for (let y = top; y < TEX_SIZE; y++) p.set(x, y, shade(color, 0.85 + (y / TEX_SIZE) * 0.2));
+}
+
+function logSide(bark: RGB) {
+  return (p: Pixmap, r: Rand) => {
+    speckle(p, r, bark, 0.06);
+    for (let x = 0; x < TEX_SIZE; x++) {
+      if (r() < 0.35) {
+        const dark = shade(bark, 0.7);
+        const y = Math.floor(r() * TEX_SIZE);
+        const len = 3 + Math.floor(r() * 8);
+        for (let k = 0; k < len; k++) p.set(x, (y + k) % TEX_SIZE, dark);
+      }
+    }
+  };
+}
+
+function logTop(core: RGB, bark: RGB) {
+  return (p: Pixmap, r: Rand) => {
+    for (let y = 0; y < TEX_SIZE; y++) {
+      for (let x = 0; x < TEX_SIZE; x++) {
+        const d = Math.max(Math.abs(x - 7.5), Math.abs(y - 7.5));
+        if (d > 6.5) p.set(x, y, shade(bark, 0.9 + r() * 0.15));
+        else p.set(x, y, shade(core, (Math.floor(d) % 2 === 0 ? 1 : 0.86) + r() * 0.05));
+      }
+    }
+  };
+}
+
+function foliage(base: RGB, holes: number) {
+  return (p: Pixmap, r: Rand) => {
+    speckle(p, r, base, 0.16);
+    blobs(p, r, shade(base, 0.7), 6, 3);
+    blobs(p, r, shade(base, 1.2), 4, 2);
+    for (let i = 0; i < TEX_SIZE * TEX_SIZE; i++) if (r() < holes) p.data[i * 4 + 3] = 0;
+  };
+}
+
+const PAINTERS: Record<string, (p: Pixmap, r: Rand) => void> = {
+  stone,
+  dirt,
+  grass_top(p, r) {
+    speckle(p, r, GRASS, 0.12);
+    blobs(p, r, shade(GRASS, 0.78), 6, 3);
+    blobs(p, r, [128, 176, 70], 4, 2);
+  },
+  grass_side(p, r) {
+    dirt(p, r);
+    for (let x = 0; x < TEX_SIZE; x++) {
+      const depth = 3 + (r() < 0.5 ? 1 : 0) + (r() < 0.2 ? 2 : 0);
+      for (let y = 0; y < depth; y++) p.set(x, y, shade(GRASS, 0.9 + r() * 0.2 - y * 0.03));
+    }
+  },
+  sand(p, r) {
+    speckle(p, r, [222, 208, 160], 0.05);
+    blobs(p, r, [204, 186, 138], 6, 2, 0.03);
+  },
+  gravel(p, r) {
+    speckle(p, r, [128, 122, 118], 0.08);
+    blobs(p, r, [92, 88, 86], 9, 4, 0.08);
+    blobs(p, r, [168, 160, 152], 7, 3, 0.05);
+  },
+  clay(p, r) {
+    speckle(p, r, [158, 164, 178], 0.04);
+    blobs(p, r, [140, 146, 162], 5, 3, 0.03);
+  },
+  dunestone_top(p, r) {
+    speckle(p, r, [214, 196, 146], 0.04);
+  },
+  dunestone_side(p, r) {
+    for (let y = 0; y < TEX_SIZE; y++) {
+      const band = y % 5 === 4 ? 0.82 : y % 5 === 0 ? 1.06 : 0.95;
+      for (let x = 0; x < TEX_SIZE; x++) p.set(x, y, shade([214, 196, 146], band + (r() * 2 - 1) * 0.03));
+    }
+  },
+  snow(p, r) {
+    speckle(p, r, [238, 244, 250], 0.025);
+    blobs(p, r, [214, 226, 240], 4, 3, 0.02);
+  },
+  frost_turf_side(p, r) {
+    dirt(p, r);
+    for (let x = 0; x < TEX_SIZE; x++) {
+      const depth = 2 + (r() < 0.5 ? 1 : 0) + (r() < 0.25 ? 2 : 0);
+      for (let y = 0; y < depth; y++) p.set(x, y, shade([236, 242, 250], 0.95 + r() * 0.05));
+    }
+  },
+  ice(p, r) {
+    speckle(p, r, [150, 192, 240], 0.05, 200);
+    for (let k = 0; k < 3; k++) {
+      const off = Math.floor(r() * TEX_SIZE);
+      for (let t = 0; t < 6; t++) p.set((off + t) % TEX_SIZE, (off * 3 + t) % TEX_SIZE, [214, 234, 255], 220);
+    }
+  },
+  corerock(p, r) {
+    for (let y = 0; y < TEX_SIZE; y++) {
+      for (let x = 0; x < TEX_SIZE; x++) {
+        const v = r();
+        p.set(x, y, v < 0.3 ? [34, 32, 40] : v < 0.7 ? [70, 68, 76] : [108, 104, 112]);
+      }
+    }
+  },
+  water(p, r) {
+    speckle(p, r, [46, 98, 196], 0.06, 175);
+    for (let y = 1; y < TEX_SIZE; y += 4) {
+      const off = Math.floor(r() * 8);
+      for (let t = 0; t < 5; t++) p.set((off + t + y) % TEX_SIZE, y, [96, 150, 232], 185);
+    }
+  },
+  ashwood_log_side: logSide([156, 142, 118]),
+  ashwood_log_top: logTop([196, 166, 112], [138, 124, 102]),
+  ashwood_leaves: foliage([74, 138, 52], 0.22),
+  frostpine_log_side: logSide([92, 62, 44]),
+  frostpine_log_top: logTop([150, 112, 72], [80, 54, 38]),
+  frostpine_needles: foliage([44, 98, 76], 0.18),
+  cactus_side(p, r) {
+    speckle(p, r, [62, 132, 54], 0.06);
+    for (let y = 0; y < TEX_SIZE; y++) {
+      for (const x of [3, 8, 12]) p.set(x, y, [44, 104, 40]);
+    }
+    for (let n = 0; n < 8; n++) p.set(Math.floor(r() * 16), Math.floor(r() * 16), [230, 226, 190]);
+  },
+  cactus_top(p, r) {
+    speckle(p, r, [74, 146, 62], 0.05);
+    for (let t = 2; t < 14; t++) {
+      p.set(t, 7, [52, 112, 46]);
+      p.set(7, t, [52, 112, 46]);
+    }
+  },
+  coal_ore: ore([34, 34, 36], [70, 70, 74]),
+  iron_ore: ore([206, 164, 132], [232, 200, 170]),
+  gold_ore: ore([246, 210, 64], [255, 244, 160]),
+  diamond_ore: ore([96, 226, 222], [210, 255, 252]),
+  lumen_crystal(p, r) {
+    speckle(p, r, [236, 196, 96], 0.06);
+    for (let n = 0; n < 6; n++) {
+      const cx = 1 + Math.floor(r() * 13);
+      const cy = 1 + Math.floor(r() * 13);
+      p.set(cx, cy, [255, 250, 210]);
+      p.set(cx + 1, cy, [255, 236, 160]);
+      p.set(cx, cy + 1, [255, 236, 160]);
+      p.set(cx + 1, cy + 1, [214, 140, 60]);
+    }
+  },
+  tall_grass(p, r) {
+    plantBase(p);
+    for (let n = 0; n < 7; n++) {
+      let x = 2 + Math.floor(r() * 12);
+      const top = 3 + Math.floor(r() * 8);
+      for (let y = TEX_SIZE - 1; y >= top; y--) {
+        p.set(x, y, shade(GRASS, 0.8 + ((TEX_SIZE - y) / TEX_SIZE) * 0.4));
+        if (r() < 0.15) x += r() < 0.5 ? -1 : 1;
+      }
+    }
+  },
+  sunbloom(p, r) {
+    plantBase(p);
+    stem(p, 7, 6, [70, 130, 48]);
+    p.set(6, 11, [70, 130, 48]);
+    p.set(8, 9, [70, 130, 48]);
+    const petals: RGB = [250, 186, 40];
+    for (const [dx, dy] of [[0, -2], [-2, 0], [2, 0], [0, 2], [-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      p.set(7 + dx, 4 + dy, shade(petals, 0.9 + r() * 0.2));
+    }
+    p.set(7, 4, [150, 70, 30]);
+  },
+  bluebell(p, r) {
+    plantBase(p);
+    stem(p, 8, 4, [60, 122, 60]);
+    for (const [bx, by] of [[6, 5], [10, 7], [6, 9]]) {
+      p.set(bx, by, shade([96, 120, 230], 0.9 + r() * 0.2));
+      p.set(bx, by + 1, [70, 90, 210]);
+      p.set(bx + (bx < 8 ? 1 : -1), by, [60, 122, 60]);
+    }
+  },
+  dry_scrub(p, r) {
+    plantBase(p);
+    const twig: RGB = [122, 88, 52];
+    const branch = (x: number, y: number, dx: number, len: number) => {
+      for (let k = 0; k < len; k++) {
+        p.set(x, y, shade(twig, 0.85 + r() * 0.3));
+        y--;
+        if (r() < 0.6) x += dx;
+      }
+    };
+    branch(7, 15, 0, 6);
+    branch(7, 11, -1, 6);
+    branch(8, 12, 1, 7);
+    branch(7, 9, 1, 4);
+  },
+};
+
+function textureSeed(name: string): number {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = hash3i(h, name.charCodeAt(i), i, 0x7e);
+  return h;
+}
+
+export function paintTexture(name: string): Pixmap {
+  const p = new Pixmap();
+  const painter = PAINTERS[name];
+  const r = mulberry32(textureSeed(name));
+  if (painter) painter(p, r);
+  else {
+    // Missing texture: magenta checker so it is obvious.
+    for (let y = 0; y < TEX_SIZE; y++) for (let x = 0; x < TEX_SIZE; x++) p.set(x, y, ((x >> 2) + (y >> 2)) % 2 ? [255, 0, 255] : [0, 0, 0]);
+  }
+  return p;
+}
+
+export function hasPainter(name: string): boolean {
+  return name in PAINTERS;
+}
