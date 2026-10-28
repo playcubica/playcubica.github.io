@@ -1,4 +1,5 @@
-import { B, DOOR_UPPER, OPAQUE, RENDER, SOLID, TORCH_WALL, withState } from './registry';
+import { I, toolId } from '../items/registry';
+import { B, DIR_VEC, DOOR_UPPER, FACING_DIR, OPAQUE, OPPOSITE_DIR, PUSHER_EXTENDED, RENDER, SOLID, TORCH_WALL, withState } from './registry';
 
 // Orientation when placing, and which blocks need another block to hold them up.
 // Shared by the client (prediction) and the host (validation).
@@ -24,8 +25,18 @@ export function facingAway(yaw: number): number {
  * The block value to place for a block item, given the clicked face normal and the
  * player's yaw, or null if it can't be placed against that face.
  */
-export function placementRaw(block: number, nx: number, ny: number, nz: number, yaw: number): number | null {
+export function placementRaw(block: number, nx: number, ny: number, nz: number, yaw: number, pitch = 0): number | null {
   switch (block) {
+    case B.RELAY:
+    case B.INVERTER:
+      // The signal travels the way the player is looking.
+      return withState(block, facingAway(yaw));
+    case B.PUSHER: {
+      // Pushes the way the player is looking (up/down when looking steeply).
+      if (pitch > 0.8) return withState(block, 2);
+      if (pitch < -0.8) return withState(block, 3);
+      return withState(block, FACING_DIR[facingAway(yaw)]);
+    }
     case B.TORCH: {
       if (ny === 1) return B.TORCH;
       if (ny === -1) return null;
@@ -48,6 +59,20 @@ export function isSupported(get: RawGetter, x: number, y: number, z: number, raw
   const state = raw >>> 12;
   const below = () => get(x, y - 1, z) & 0xfff;
   if (id === B.ASHWOOD_SAPLING || id === B.FROSTPINE_SAPLING) return SAPLING_SOIL.has(below());
+  if (id === B.SUNWHEAT) return below() === B.FARMLAND;
+  if (id === B.GLOWWIRE || id === B.LEVER || id === B.PRESSURE_PLATE || id === B.RELAY || id === B.INVERTER) {
+    const b = below();
+    return OPAQUE[b] === 1 && SOLID[b] === 1;
+  }
+  if (id === B.RIFT) {
+    const b = below();
+    return b === B.RIFT_STONE || b === B.RIFT;
+  }
+  if (id === B.PUSHER_HEAD) {
+    const [dx, dy, dz] = DIR_VEC[OPPOSITE_DIR[state & 7]];
+    const behind = get(x + dx, y + dy, z + dz);
+    return (behind & 0xfff) === B.PUSHER && ((behind >>> 12) & PUSHER_EXTENDED) !== 0;
+  }
   if (RENDER[id] === 2) return OPAQUE[below()] === 1;
   if (id === B.CACTUS) {
     const b = below();
@@ -66,7 +91,29 @@ export function isSupported(get: RawGetter, x: number, y: number, z: number, raw
   return true;
 }
 
-/** Blocks that react to a right-click instead of having something placed against them. */
-export function isInteractive(id: number): boolean {
-  return id === B.WORKBENCH || id === B.FURNACE || id === B.FURNACE_LIT || id === B.CHEST || id === B.ASHWOOD_DOOR || id === B.BEDROLL;
+const SHOVEL_IDS = new Set([0, 1, 2, 3, 4].map((t) => toolId(t, 2)));
+const TILLABLE = new Set<number>([B.GRASS, B.DIRT, B.FROST_TURF]);
+
+/**
+ * True if right-clicking this block (holding `heldId`) does something to it — opening,
+ * toggling, tilling, fertilising, igniting a rift — instead of placing against it.
+ */
+export function isInteractive(id: number, heldId = 0): boolean {
+  switch (id) {
+    case B.WORKBENCH:
+    case B.FURNACE:
+    case B.FURNACE_LIT:
+    case B.CHEST:
+    case B.ASHWOOD_DOOR:
+    case B.BEDROLL:
+    case B.LEVER:
+    case B.RUNE_TABLE:
+      return true;
+    case B.RIFT_STONE:
+      return heldId === I.LUMEN_DUST;
+    case B.SUNWHEAT:
+      return heldId === I.SPORE_POWDER;
+    default:
+      return TILLABLE.has(id) && SHOVEL_IDS.has(heldId);
+  }
 }

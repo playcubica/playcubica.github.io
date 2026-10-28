@@ -1,5 +1,5 @@
 import { B } from '../blocks/registry';
-import { headId, I, toolId, TIERS, type ItemStack } from './registry';
+import { headId, I, RUNE_ITEMS, toolId, TIERS, type ItemStack } from './registry';
 
 // Crafting and smelting recipes (Cubica's own). Shaped patterns may be placed
 // anywhere in the grid and may be mirrored left-right.
@@ -32,7 +32,19 @@ const shaped: Shaped[] = [
   { pattern: ['PPP', 'P P', 'PPP'], keys: { P: PLANKS }, result: { id: B.CHEST, count: 1 } },
   { pattern: ['C', 'S'], keys: { C: I.COAL, S: I.STICK }, result: { id: B.TORCH, count: 4 } },
   { pattern: ['LLL', 'PPP'], keys: { L: SOFT, P: PLANKS }, result: { id: B.BEDROLL, count: 1 } },
-  { pattern: ['SS', 'SS'], keys: { S: I.SPORE_POWDER }, result: { id: B.LUMEN_CRYSTAL, count: 1 } },
+  { pattern: ['DD', 'DD'], keys: { D: I.LUMEN_DUST }, result: { id: B.LUMEN_CRYSTAL, count: 1 } },
+  { pattern: ['WWW'], keys: { W: I.SUNWHEAT }, result: { id: I.BREAD, count: 1 } },
+  // Glow power (signals).
+  { pattern: ['S', 'R'], keys: { S: I.STICK, R: B.RUBBLESTONE }, result: { id: B.LEVER, count: 1 } },
+  { pattern: ['CC'], keys: { C: B.CUT_STONE }, result: { id: B.PRESSURE_PLATE, count: 1 } },
+  { pattern: ['DDD', 'DDD', 'DDD'], keys: { D: I.LUMEN_DUST }, result: { id: B.POWER_CRYSTAL, count: 1 } },
+  { pattern: ['DSD', 'CCC'], keys: { D: I.LUMEN_DUST, S: I.STICK, C: B.CUT_STONE }, result: { id: B.RELAY, count: 1 } },
+  { pattern: [' D ', 'CCC'], keys: { D: I.LUMEN_DUST, C: B.CUT_STONE }, result: { id: B.INVERTER, count: 1 } },
+  { pattern: [' D ', 'DGD', ' D '], keys: { D: I.LUMEN_DUST, G: B.GLASS }, result: { id: B.LAMP, count: 1 } },
+  { pattern: ['PPP', 'RIR', 'RDR'], keys: { P: PLANKS, R: B.RUBBLESTONE, I: I.IRON_INGOT, D: I.LUMEN_DUST }, result: { id: B.PUSHER, count: 1 } },
+  // Runes and the rift.
+  { pattern: [' L ', 'DCD', 'CCC'], keys: { L: B.LUMEN_CRYSTAL, D: I.DIAMOND, C: B.CUT_STONE }, result: { id: B.RUNE_TABLE, count: 1 } },
+  { pattern: ['CLC', 'LDL', 'CLC'], keys: { C: B.CUT_STONE, L: B.LUMEN_CRYSTAL, D: I.DIAMOND }, result: { id: B.RIFT_STONE, count: 1 } },
   { pattern: ['PP', 'PP', 'PP'], keys: { P: PLANKS }, result: { id: B.ASHWOOD_DOOR, count: 3 } },
   { pattern: ['SS', 'SS'], keys: { S: B.STONE }, result: { id: B.CUT_STONE, count: 4 } },
 ];
@@ -41,6 +53,12 @@ const shapeless: Shapeless[] = [
   { ingredients: [B.ASHWOOD_LOG], result: { id: B.ASHWOOD_PLANKS, count: 4 } },
   { ingredients: [B.FROSTPINE_LOG], result: { id: B.FROSTPINE_PLANKS, count: 4 } },
   { ingredients: [PLANKS], result: { id: I.STICK, count: 2 } },
+  { ingredients: [I.SUNWHEAT], result: { id: I.SEEDS, count: 2 } },
+  // Rune stones: cut stone + ember shard + lumen dust + the rune's own ingredient.
+  ...[I.GOLD_INGOT, I.IRON_INGOT, I.DIAMOND, I.SPORE_POWDER].map((x, i) => ({
+    ingredients: [B.CUT_STONE, I.EMBER_SHARD, I.LUMEN_DUST, x],
+    result: { id: RUNE_ITEMS[i], count: 1 },
+  })),
 ];
 
 TIERS.forEach((_, t) => {

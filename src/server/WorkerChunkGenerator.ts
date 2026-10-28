@@ -20,6 +20,7 @@ export class WorkerChunkGenerator implements ChunkGenerator {
     const r = await this.pool.run({ seed: this.seed, cx, cz });
     const c = new Chunk(r.cx, r.cz, r.blocks, r.light, r.heightmap, r.biomes);
     c.maxY = r.maxY;
+    for (const [i, be] of r.blockEntities) c.blockEntities.set(i, be);
     return c;
   }
 

@@ -1,4 +1,5 @@
 import { GameClient, type ClientStatus } from '../client/GameClient';
+import type { Settings } from '../client/settings';
 import { createLocalPair } from '../net/LocalTransport';
 import { HostNetwork } from '../net/peerNetwork';
 import type { Transport } from '../net/Transport';
@@ -10,6 +11,7 @@ import type { ClientMsg, ServerMsg } from '../shared/protocol/messages';
 export interface SessionOptions {
   viewDistance: number;
   playerName: string;
+  settings: Settings;
 }
 
 /**
@@ -36,7 +38,7 @@ export class GameSession {
     const server = new GameServer({ viewDistance: opts.viewDistance, meta, store: storage?.forWorld(meta.id) }, generator);
     const [serverEnd, clientEnd] = createLocalPair<ServerMsg, ClientMsg>();
     server.addConnection(serverEnd, { host: true });
-    const client = new GameClient(container, clientEnd, { name: opts.playerName });
+    const client = new GameClient(container, clientEnd, { name: opts.playerName, settings: opts.settings });
     client.onStatus = onStatus;
     server.start();
     client.start();
@@ -44,7 +46,7 @@ export class GameSession {
   }
 
   static remote(container: HTMLElement, transport: Transport<ClientMsg, ServerMsg>, opts: SessionOptions, onStatus: (s: ClientStatus) => void, onLeave: () => void): GameSession {
-    const client = new GameClient(container, transport, { name: opts.playerName, remote: true });
+    const client = new GameClient(container, transport, { name: opts.playerName, settings: opts.settings, remote: true });
     client.onStatus = onStatus;
     client.start();
     return new GameSession(null, null, client, onLeave);

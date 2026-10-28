@@ -5,6 +5,8 @@ import { hash01, hash3i, mulberry32 } from '../../shared/rng';
 import { Biome } from '../../shared/world/biomes';
 import { Chunk, idx } from '../../shared/world/Chunk';
 import { ashwoodTree, frostpineTree, type BlockSetter } from './trees';
+import { DEEP_CEILING, isDeep } from '../../shared/world/dimensions';
+import { buildSettlement, settlementsTouching } from './settlements';
 
 // Deterministic terrain generator: the same seed always yields the same chunk,
 // and every chunk can be generated independently (trees that cross chunk borders
@@ -113,6 +115,7 @@ export class WorldGenerator {
   }
 
   generate(cx: number, cz: number): Chunk {
+    if (isDeep(cx * 16)) return this.generateDeep(cx, cz);
     const chunk = new Chunk(cx, cz);
     const bx = cx * 16;
     const bz = cz * 16;
@@ -288,6 +291,70 @@ export class WorldGenerator {
       }
     }
 
+    // --- Settlements (only the part inside this chunk) ---
+    for (const st of settlementsTouching(this, bx, bz, bx + 15, bz + 15)) {
+      buildSettlement(st, this, (x, y, z, raw) => {
+        const lx = x - bx;
+        const lz = z - bz;
+        if (lx >= 0 && lx < 16 && lz >= 0 && lz < 16 && y >= 0 && y < 256) chunk.blocks[idx(lx, y, lz)] = raw;
+      }, (x, y, z, be) => {
+        const lx = x - bx;
+        const lz = z - bz;
+        if (lx >= 0 && lx < 16 && lz >= 0 && lz < 16) chunk.blockEntities.set(idx(lx, y, lz), be);
+      });
+    }
+
+    chunk.recomputeHeights();
+    return chunk;
+  }
+
+  /** The Ember Deep: caverns of ashstone between corerock floor and ceiling, magma lakes below. */
+  generateDeep(cx: number, cz: number): Chunk {
+    const chunk = new Chunk(cx, cz);
+    const bx = cx * 16;
+    const bz = cz * 16;
+    const seed = this.seed;
+    for (let lz = 0; lz < 16; lz++) {
+      for (let lx = 0; lx < 16; lx++) {
+        const wx = bx + lx;
+        const wz = bz + lz;
+        chunk.biomes[lx | (lz << 4)] = Biome.EMBER_DEEP;
+        for (let y = 0; y <= DEEP_CEILING; y++) {
+          const shell = y === 0 || y === DEEP_CEILING ||
+            (y < 4 && hash01(seed ^ 0xbed, wx, y, wz) < (4 - y) * 0.25) ||
+            (y > DEEP_CEILING - 4 && hash01(seed ^ 0xbee, wx, y, wz) < (y - DEEP_CEILING + 4) * 0.25);
+          let id: number;
+          if (shell) id = B.COREROCK;
+          else {
+            const n = this.caveA.noise3(wx / 52, y / 30, wz / 52) + 0.4 * this.caveB.noise3(wx / 18, y / 14, wz / 18);
+            const bias = y < 26 ? (26 - y) * 0.03 : y > 100 ? (y - 100) * 0.04 : 0;
+            if (n - bias > 0.08) id = y <= 24 ? B.MAGMA : B.AIR;
+            else id = this.caveC.noise3(wx / 13, y / 13, wz / 13) > 0.5 ? B.EMBERSTONE : B.ASHSTONE;
+          }
+          chunk.blocks[idx(lx, y, lz)] = id;
+        }
+      }
+    }
+    // Ember ore veins, and lumen crystals hanging from cavern ceilings.
+    const rnd = mulberry32(hash3i(seed ^ 0xe3b, cx, 7, cz));
+    for (let t = 0; t < 12; t++) {
+      let x = Math.floor(rnd() * 16);
+      let y = 8 + Math.floor(rnd() * 110);
+      let z = Math.floor(rnd() * 16);
+      for (let k = 0; k < 5; k++) {
+        if (x >= 0 && x < 16 && z >= 0 && z < 16 && chunk.blocks[idx(x, y, z)] === B.ASHSTONE) chunk.blocks[idx(x, y, z)] = B.EMBER_ORE;
+        const r = rnd();
+        if (r < 0.33) x += rnd() < 0.5 ? -1 : 1;
+        else if (r < 0.66) y += rnd() < 0.5 ? -1 : 1;
+        else z += rnd() < 0.5 ? -1 : 1;
+      }
+    }
+    for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) for (let y = 30; y < DEEP_CEILING - 4; y++) {
+      const i = idx(lx, y, lz);
+      if (chunk.blocks[i] === B.AIR && chunk.blocks[i + 256] === B.ASHSTONE && hash01(seed ^ 0x1c4, bx + lx, y, bz + lz) < 0.01) {
+        chunk.blocks[i + 256] = B.LUMEN_CRYSTAL;
+      }
+    }
     chunk.recomputeHeights();
     return chunk;
   }

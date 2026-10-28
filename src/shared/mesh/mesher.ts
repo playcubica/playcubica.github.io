@@ -1,4 +1,4 @@
-import { blockShape, CULL_SAME, faceLayer, OPAQUE, RENDER, TEX_SIDE, TRANSLUCENT } from '../blocks/registry';
+import { blockShape, CULL_SAME, faceLayer, OPAQUE, RENDER, TRANSLUCENT } from '../blocks/registry';
 
 // Greedy mesher for one chunk. Input is a padded volume: the chunk plus a one-block
 // ring of its neighbours, so faces and smooth lighting at the edges are correct.
@@ -283,7 +283,7 @@ export function buildChunkMesh(input: MeshInput): MeshOutput {
         if (y < minY) minY = y;
         if (y > maxY) maxY = y;
         const l = lightAt(x, y, z);
-        const layer = TEX_SIDE[id];
+        const layer = faceLayer(blocks[paddedIndex(x, y, z)], 0);
         const x0 = x * 16 + 2;
         const x1 = x * 16 + 14;
         const z0 = z * 16 + 2;

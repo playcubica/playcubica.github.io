@@ -55,6 +55,20 @@ export class ServerWorld implements SolidQuery {
     return true;
   }
 
+  /** Loads (or generates) a chunk right away, ignoring the streaming limit. */
+  async ensureChunk(cx: number, cz: number): Promise<Chunk> {
+    const have = this.getChunk(cx, cz);
+    if (have) return have;
+    const c = await this.load(cx, cz);
+    const key = chunkKey(cx, cz);
+    const raced = this.chunks.get(key);
+    if (raced) return raced;
+    this.pending.delete(key);
+    this.chunks.set(key, c);
+    this.onLoad?.(c);
+    return c;
+  }
+
   private async load(cx: number, cz: number): Promise<Chunk> {
     const evicted = this.evicted.get(chunkKey(cx, cz));
     if (evicted) return decodeChunk(evicted);

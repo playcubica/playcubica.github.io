@@ -24,11 +24,17 @@ import { setIconAtlas } from './ui/icons';
 import { EntityRenderer } from './render/EntityRenderer';
 import { PlayerModels } from './render/PlayerModels';
 import { MobRenderer } from './render/MobRenderer';
+import { AudioEngine, materialOf } from './audio/AudioEngine';
+import { loadSettings, type Settings } from './settings';
+import { TradeScreen } from './ui/TradeScreen';
+import { isDeep } from '../shared/world/dimensions';
+import { B } from '../shared/blocks/registry';
 import { ChatInput, PlayerListView } from './ui/Social';
 import type { PlayerListEntry } from '../shared/protocol/messages';
 
 export interface ClientOptions {
   name: string;
+  settings?: Settings;
   fov?: number;
   /** Connected to another machine's host (enables the connection watchdog). */
   remote?: boolean;
@@ -102,13 +108,23 @@ export class GameClient implements InteractionHost, WindowHost {
   private frameMs = 0;
   private debugAt = 0;
   private eyeOffset = 1.62;
-  private readonly baseFov: number;
+  private baseFov: number;
+  readonly audio = new AudioEngine();
+  private settings: Settings;
+  private readonly tradeScreen: TradeScreen;
+  /** Positions this client changed itself recently (their sounds already played), by "x,y,z" → time. */
+  private readonly predicted = new Map<string, number>();
+  private stepDistance = 0;
+  private wasEating = false;
+  private inRift = false;
+  private nextIdleSound = 0;
   private rafId = 0;
   private disposed = false;
   private readonly dir = new THREE.Vector3();
 
   constructor(container: HTMLElement, private readonly transport: Transport<ClientMsg, ServerMsg>, private readonly options: ClientOptions) {
-    this.baseFov = options.fov ?? 70;
+    this.settings = options.settings ?? loadSettings();
+    this.baseFov = options.fov ?? this.settings.fov;
     this.renderer = new Renderer(container, this.baseFov);
     const textures = buildBlockTextures();
     setIconAtlas(textures.atlas);
@@ -120,6 +136,11 @@ export class GameClient implements InteractionHost, WindowHost {
     this.interaction = new BlockInteraction(this.renderer.scene, this, this.controls);
     this.hud = new Hud(container);
     this.windowScreen = new WindowScreen(container, this);
+    this.tradeScreen = new TradeScreen(container, this.inventory);
+    this.tradeScreen.onTrade = (entityId, offer) => {
+      this.send({ t: 'trade', entityId, offer });
+      this.audio.play('click');
+    };
     this.entities = new EntityRenderer(this.renderer.scene, this.world);
     this.others = new PlayerModels(this.renderer.scene, this.world);
     this.mobs = new MobRenderer(this.renderer.scene, this.world);
@@ -173,7 +194,35 @@ export class GameClient implements InteractionHost, WindowHost {
   }
 
   predictBlock(x: number, y: number, z: number, id: number): void {
+    this.predicted.set(`${x},${y},${z}`, performance.now());
+    this.blockSound(x, y, z, this.world.getRaw(x, y, z), id);
     this.applyBlock(x, y, z, id);
+  }
+
+  /** Break / place / door / lever sounds for a block change. */
+  private blockSound(x: number, y: number, z: number, oldRaw: number, raw: number): void {
+    const oldId = oldRaw & 0xfff;
+    const id = raw & 0xfff;
+    if (oldId === id) {
+      if (id === B.ASHWOOD_DOOR) this.audio.play('door', { x, y, z });
+      else if (id === B.LEVER) this.audio.play('click', { x, y, z });
+      return;
+    }
+    if (id === B.GLOWWIRE || oldId === B.GLOWWIRE || id === B.LAMP_ON || oldId === B.LAMP_ON || id === B.PUSHER_HEAD || oldId === B.PUSHER_HEAD) return;
+    if (id === B.AIR && oldId !== B.AIR) this.audio.play('break', { x, y, z }, materialOf(oldId));
+    else if (id !== B.AIR) this.audio.play('place', { x, y, z }, materialOf(id));
+  }
+
+  /** Applies new settings (from the settings screen). */
+  applySettings(s: Settings): void {
+    this.settings = s;
+    this.baseFov = s.fov;
+    this.controls.sensitivity = 0.0022 * s.sensitivity;
+    this.audio.setVolumes(s.sound, s.music);
+    if (s.viewDistance !== this.viewDistance) {
+      this.viewDistance = s.viewDistance;
+      this.send({ t: 'settings', viewDistance: s.viewDistance });
+    }
   }
 
   pickEntity(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number): { id: number; distance: number } | null {
@@ -211,6 +260,9 @@ export class GameClient implements InteractionHost, WindowHost {
   start(): void {
     this.onStatus?.({ kind: 'connecting' });
     this.send({ t: 'hello', v: PROTOCOL_VERSION, name: this.options.name });
+    this.send({ t: 'settings', viewDistance: this.settings.viewDistance });
+    this.controls.sensitivity = 0.0022 * this.settings.sensitivity;
+    this.audio.setVolumes(this.settings.sound, this.settings.music);
     const loop = (now: number) => {
       if (this.disposed) return;
       this.frame(now);
@@ -221,8 +273,9 @@ export class GameClient implements InteractionHost, WindowHost {
 
   /** Called from a click (user gesture) to enter the game. */
   resume(): void {
+    this.audio.unlock();
     if (this.state === 'disconnected' || this.state === 'loading' || this.state === 'dead') return;
-    if (this.windowScreen.open) this.closeWindow(false);
+    if (this.windowScreen.open || this.tradeScreen.open) this.closeWindow(false);
     this.setState('resuming');
     this.controls.lock();
   }
@@ -293,6 +346,14 @@ export class GameClient implements InteractionHost, WindowHost {
   }
 
   private closeWindow(relock: boolean): void {
+    if (this.tradeScreen.open) {
+      this.tradeScreen.hide();
+      if (relock) {
+        this.state = 'resuming';
+        this.controls.lock();
+      } else this.setState('paused');
+      return;
+    }
     const w = this.currentWindow;
     this.send({ t: 'closeWindow', window: w.id });
     // Predict: crafting leftovers and the cursor stack return to the inventory.
@@ -325,6 +386,8 @@ export class GameClient implements InteractionHost, WindowHost {
   }
 
   dispose(): void {
+    this.audio.dispose();
+    this.tradeScreen.dispose();
     this.disposed = true;
     cancelAnimationFrame(this.rafId);
     this.controls.dispose();
@@ -349,7 +412,7 @@ export class GameClient implements InteractionHost, WindowHost {
         this.playerId = msg.playerId;
         for (const pl of msg.players) if (pl.id !== msg.playerId) this.others.add(pl.id, pl.name);
         this.seed = msg.seed;
-        this.viewDistance = msg.viewDistance;
+        this.viewDistance = this.settings.viewDistance;
         this.isHost = msg.isHost;
         this.setServerTime(msg.time);
         this.gameMode = msg.gameMode;
@@ -367,10 +430,15 @@ export class GameClient implements InteractionHost, WindowHost {
       case 'unloadChunk':
         this.worldQueue.push(msg);
         break;
-      case 'blockChange':
+      case 'blockChange': {
+        // Changes this client made itself already made their sound.
+        const k = `${msg.x},${msg.y},${msg.z}`;
+        const mine = performance.now() - (this.predicted.get(k) ?? -1e9) < 1500;
+        if (!mine) this.blockSound(msg.x, msg.y, msg.z, this.world.getRaw(msg.x, msg.y, msg.z), msg.id);
         if (this.worldQueue.length === 0) this.applyBlock(msg.x, msg.y, msg.z, msg.id);
         else this.worldQueue.push(msg);
         break;
+      }
       case 'inventory':
         this.inventory.load(msg.state);
         this.windowScreen.render();
@@ -408,8 +476,17 @@ export class GameClient implements InteractionHost, WindowHost {
       case 'hurt':
         this.hud.flashHurt();
         this.shake = 0.3;
+        this.audio.play('hurt');
+        break;
+      case 'trades':
+        if (this.state === 'window') this.closeWindow(false);
+        this.tradeScreen.show(msg.entityId, msg.profession, msg.offers);
+        this.state = 'window';
+        this.controls.unlock();
         break;
       case 'death':
+        this.audio.play('death');
+        this.tradeScreen.hide();
         this.container = null;
         this.windowScreen.hide();
         this.state = 'dead';
@@ -422,17 +499,25 @@ export class GameClient implements InteractionHost, WindowHost {
       case 'entitySpawn':
         if (msg.entity.kind === 'item') this.entities.spawn(msg.entity);
         else this.mobs.spawn(msg.entity);
+        if (msg.entity.kind === 'projectile') this.audio.play('thorn', msg.entity);
         break;
       case 'entityDespawn':
+        if (msg.pickedBy === this.playerId) this.audio.play('pickup');
         this.entities.remove(msg.id);
         this.mobs.remove(msg.id);
         break;
       case 'mobMove':
         this.mobs.move(msg.data);
         break;
-      case 'entityEvent':
+      case 'entityEvent': {
         this.mobs.event(msg.id, msg.event);
+        const at = this.mobs.position(msg.id);
+        if (at) {
+          if (msg.event === 'spores') this.audio.play('spores', at);
+          else this.audio.play(this.mobs.isHostile(msg.id) ? 'growl' : 'grunt', at, 'stone', msg.event === 'death' ? 1 : 0.7);
+        }
         break;
+      }
       case 'knockback':
         this.player.body.push(msg.vx, msg.vy, msg.vz);
         break;
@@ -531,21 +616,62 @@ export class GameClient implements InteractionHost, WindowHost {
       this.interaction.update(dt, cam.position, this.dir);
     }
     this.hud.setEating(this.interaction.eating);
+    if (this.wasEating && this.interaction.eating === null) this.audio.play('eat');
+    this.wasEating = (this.interaction.eating ?? 0) > 0.85;
 
     const sky = this.sky.update(this.time, cam);
-    const underwater = this.world.isWater(Math.floor(cam.position.x), Math.floor(cam.position.y), Math.floor(cam.position.z));
+    const ex = Math.floor(cam.position.x);
+    const ey = Math.floor(cam.position.y);
+    const ez = Math.floor(cam.position.z);
+    const eyeBlock = this.world.getBlock(ex, ey, ez);
+    const underwater = eyeBlock === B.WATER;
+    const deep = isDeep(cam.position.x);
     this.uniforms.uSkyLight.value.copy(sky.skyLight);
-    if (underwater) {
+    this.uniforms.uMinLight.value = deep ? 0.16 : 0.06;
+    if (eyeBlock === B.MAGMA) {
+      this.uniforms.uFogColor.value.setRGB(0.9, 0.35, 0.05);
+      this.uniforms.uFogNear.value = 0;
+      this.uniforms.uFogFar.value = 3;
+    } else if (underwater) {
       this.uniforms.uFogColor.value.copy(UNDERWATER_FOG).multiplyScalar(0.3 + 0.7 * sky.daylight);
       this.uniforms.uFogNear.value = 0;
       this.uniforms.uFogFar.value = 22;
+    } else if (deep) {
+      this.uniforms.uFogColor.value.setRGB(0.2, 0.06, 0.04);
+      this.uniforms.uFogFar.value = Math.min(this.viewDistance * 16, 96);
+      this.uniforms.uFogNear.value = 8;
     } else {
       this.uniforms.uFogColor.value.copy(sky.horizon);
       this.uniforms.uFogFar.value = this.viewDistance * 16;
       this.uniforms.uFogNear.value = this.viewDistance * 16 * 0.55;
     }
     this.renderer.gl.setClearColor(this.uniforms.uFogColor.value);
-    this.sky.group.visible = !underwater;
+    this.sky.group.visible = !underwater && !deep;
+    this.audio.mood = deep ? 'deep' : sky.daylight < 0.3 ? 'night' : 'day';
+
+    // Rift: purple haze and a shimmer while standing in one.
+    const rift = this.world.getBlock(Math.floor(body.x), Math.floor(body.y + 0.2), Math.floor(body.z)) === B.RIFT;
+    if (rift && !this.inRift) this.audio.play('rift');
+    this.inRift = rift;
+    this.hud.setRift(rift);
+
+    // Footsteps.
+    if (body.onGround && !body.flying && this.state === 'playing') {
+      this.stepDistance += Math.hypot(body.vx, body.vz) * dt;
+      if (this.stepDistance > 2.2) {
+        this.stepDistance = 0;
+        const under = this.world.getBlock(Math.floor(body.x), Math.floor(body.y - 0.1), Math.floor(body.z));
+        if (under !== B.AIR) this.audio.play('step', undefined, materialOf(under), 0.6);
+      }
+    }
+    // Now and then a nearby creature makes a sound.
+    if (now > this.nextIdleSound) {
+      this.nextIdleSound = now + 4000 + Math.random() * 8000;
+      const near = this.mobs.randomNear(body.x, body.y, body.z, 16);
+      if (near) this.audio.play(near.hostile ? 'growl' : 'grunt', near, 'stone', 0.5);
+    }
+    this.audio.setListener(cam.position.x, cam.position.y, cam.position.z, this.controls.yaw);
+    this.audio.tick();
 
     this.meshes.update(body.x, body.z);
     this.entities.update(dt, sky.daylight);
@@ -599,7 +725,7 @@ export class GameClient implements InteractionHost, WindowHost {
     const tg = this.interaction.target;
     const state = [b.onGround && 'ground', b.inWater && 'water', b.flying && 'flying', b.sneaking && 'sneak', b.sprinting && 'sprint'].filter(Boolean).join(' ');
     this.debug.set([
-      'Cubica 0.5 (stage 5)',
+      'Cubica 0.6 (stage 6)',
       `${this.fps} fps  (cpu ${this.frameMs.toFixed(1)} ms)  draws ${info.calls}  tris ${Math.round(info.triangles / 1000)}k`,
       `XYZ ${b.x.toFixed(2)} / ${b.y.toFixed(2)} / ${b.z.toFixed(2)}  ${state}`,
       `Chunk ${bx >> 4} ${bz >> 4}  facing ${facing}`,

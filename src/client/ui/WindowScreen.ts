@@ -2,6 +2,7 @@ import { HOTBAR_SIZE, INVENTORY_SIZE, InvAction, type Inventory, type Slot } fro
 import { CREATIVE_ITEMS, itemName } from '../../shared/items/registry';
 import { WINDOW_LAYOUT, type WindowKind } from '../../shared/items/Window';
 import { renderSlot } from './Hud';
+import { runeLabel } from '../../shared/items/runes';
 
 export interface OpenWindowState {
   id: number;
@@ -24,6 +25,7 @@ const TITLES: Record<WindowKind, string> = {
   workbench: 'שולחן מלאכה',
   furnace: 'כבשן',
   chest: 'תיבה',
+  runetable: 'שולחן רונות — כלי + רונה + אבקת זוהר',
 };
 
 /** The screen shown with E or when a container is opened. */
@@ -57,7 +59,8 @@ export class WindowScreen {
       let text = el?.dataset.tip ?? '';
       if (!text && el?.dataset.slot) {
         const s = this.getSlot(Number(el.dataset.slot));
-        text = s ? itemName(s.id) : '';
+        const runes = runeLabel(s);
+        text = s ? itemName(s.id) + (runes ? ` (${runes})` : '') : '';
       }
       this.tooltip.textContent = text;
       this.tooltip.style.display = text && !host.inventory.cursor ? '' : 'none';
@@ -146,6 +149,12 @@ export class WindowScreen {
       arrow.textContent = '➜';
       top.appendChild(arrow);
       top.appendChild(this.slot(layout.output, 'output'));
+    } else if (w.kind === 'runetable') {
+      top.append(this.slot(0), this.slot(1), this.slot(2));
+      const arrow = document.createElement('div');
+      arrow.className = 'inv-arrow';
+      arrow.textContent = '➜';
+      top.append(arrow, this.slot(3, 'output'));
     } else if (w.kind === 'furnace') {
       const col = document.createElement('div');
       col.className = 'furnace-col';

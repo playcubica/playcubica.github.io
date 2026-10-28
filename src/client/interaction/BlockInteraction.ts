@@ -1,10 +1,11 @@
 import * as THREE from 'three';
-import { B, DOOR_OPEN, DOOR_UPPER, OPAQUE, RENDER, REPLACEABLE, SOLID, withState } from '../../shared/blocks/registry';
+import { B, DOOR_OPEN, DOOR_UPPER, POWER_ON, OPAQUE, RENDER, REPLACEABLE, SOLID, withState } from '../../shared/blocks/registry';
 import { isInteractive, isSupported, placementRaw } from '../../shared/blocks/placement';
 import type { Inventory } from '../../shared/items/Inventory';
 import { breakTime, CREATIVE_BREAK_DELAY, EAT_TIME, REACH } from '../../shared/items/mining';
 import { PLAYER_ATTACK_COOLDOWN, PLAYER_ATTACK_REACH } from '../../shared/entities/mobs';
 import { itemDef } from '../../shared/items/registry';
+import { runeLevel, RUNE_SWIFT } from '../../shared/items/runes';
 import { boxOverlapsBlock } from '../../shared/physics/collision';
 import { raycast, type RayHit } from '../../shared/physics/raycast';
 import { mulberry32 } from '../../shared/rng';
@@ -144,7 +145,7 @@ export class BlockInteraction {
 
   /** Right-click on this block opens/toggles it (sneak to place against it instead). */
   private usesBlock(t: RayHit): boolean {
-    return isInteractive(t.id) && !this.controls.isDown(KEYS.sneak);
+    return isInteractive(t.id, this.host.inventory.held?.id ?? 0) && !this.controls.isDown(KEYS.sneak);
   }
 
   private canEatHeld(): boolean {
@@ -155,7 +156,8 @@ export class BlockInteraction {
   private mouseDown(button: number): void {
     const t = this.target;
     if (button === MouseButton.RIGHT) {
-      if (t && this.usesBlock(t)) this.useBlock(t);
+      if (this.entityTarget !== null) this.host.send({ t: 'interact', entityId: this.entityTarget });
+      else if (t && this.usesBlock(t)) this.useBlock(t);
       else if (!this.canEatHeld()) {
         this.placeCooldown = 0;
         this.place();
@@ -178,6 +180,7 @@ export class BlockInteraction {
   private useBlock(t: RayHit): void {
     const h = this.host;
     h.send({ t: 'useBlock', x: t.x, y: t.y, z: t.z });
+    if (t.id === B.LEVER) h.predictBlock(t.x, t.y, t.z, h.world.getRaw(t.x, t.y, t.z) ^ (POWER_ON << 12));
     if (t.id === B.ASHWOOD_DOOR) {
       const raw = h.world.getRaw(t.x, t.y, t.z);
       const lower = (raw >>> 12) & DOOR_UPPER ? t.y - 1 : t.y;
@@ -220,7 +223,7 @@ export class BlockInteraction {
     if (!d || d.x !== t.x || d.y !== t.y || d.z !== t.z) {
       this.stopDigging();
       const held = h.inventory.held;
-      const need = breakTime(t.id, held ? itemDef(held.id) : undefined, false);
+      const need = breakTime(t.id, held ? itemDef(held.id) : undefined, false, runeLevel(held, RUNE_SWIFT));
       if (!Number.isFinite(need)) return;
       this.dig = { x: t.x, y: t.y, z: t.z, progress: 0, need };
       h.send({ t: 'dig', phase: 0, x: t.x, y: t.y, z: t.z, face: 0 });
@@ -271,7 +274,7 @@ export class BlockInteraction {
     // Clicking a replaceable block (tall grass…) places into it; otherwise next to the clicked face.
     const into = REPLACEABLE[t.id] === 1;
     const [x, y, z] = into ? [t.x, t.y, t.z] : [t.x + t.nx, t.y + t.ny, t.z + t.nz];
-    const raw = placementRaw(block, into ? 0 : t.nx, into ? 1 : t.ny, into ? 0 : t.nz, this.controls.yaw);
+    const raw = placementRaw(block, into ? 0 : t.nx, into ? 1 : t.ny, into ? 0 : t.nz, this.controls.yaw, this.controls.pitch);
     if (raw === null || y < 0 || y > 255) return;
     const w = h.world;
     const current = w.getBlock(x, y, z);

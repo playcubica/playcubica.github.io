@@ -19,6 +19,10 @@ export interface BlockDef {
   alt?: string;
   /** Shape for 'box' blocks, by state. Also used for collision when solid. */
   shape?: (state: number) => PxBox[];
+  /** Texture name by state and face (overrides tex/front/alt), for growth stages, on/off, facing. */
+  texFn?: (state: number, dir: number) => string;
+  /** Every texture name texFn can return (so they get array layers). */
+  extraTex?: string[];
   /** Full opaque cube: blocks light and hides neighbouring faces. */
   opaque: boolean;
   /** Collides with entities. */
@@ -81,6 +85,25 @@ export const B = {
   ASHWOOD_DOOR: 38,
   ASHWOOD_SAPLING: 39,
   FROSTPINE_SAPLING: 40,
+  FARMLAND: 41,
+  SUNWHEAT: 42,
+  GLOWWIRE: 43,
+  LEVER: 44,
+  PRESSURE_PLATE: 45,
+  POWER_CRYSTAL: 46,
+  RELAY: 47,
+  INVERTER: 48,
+  LAMP: 49,
+  LAMP_ON: 50,
+  PUSHER: 51,
+  PUSHER_HEAD: 52,
+  RIFT_STONE: 53,
+  RIFT: 54,
+  ASHSTONE: 55,
+  EMBERSTONE: 56,
+  EMBER_ORE: 57,
+  MAGMA: 58,
+  RUNE_TABLE: 59,
 } as const;
 
 // --- Block state helpers -----------------------------------------------------
@@ -101,6 +124,35 @@ export const TORCH_WALL: ReadonlyArray<readonly [number, number, number]> = [[0,
 
 // Thin panels along each edge, indexed by facing (0 +z, 1 -x, 2 -z, 3 +x).
 const DOOR_PANELS: PxBox[] = [[0, 0, 13, 16, 16, 16], [0, 0, 0, 3, 16, 16], [0, 0, 0, 16, 16, 3], [13, 0, 0, 16, 16, 16]];
+/** Mesher face directions (0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z) as vectors; used by pushers (state & 7). */
+export const DIR_VEC: ReadonlyArray<readonly [number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+export const OPPOSITE_DIR = [1, 0, 3, 2, 5, 4];
+/** Power state bits: relay/inverter output on; lever on / plate pressed; pusher extended. */
+export const POWER_ON = 4;
+export const PUSHER_EXTENDED = 8;
+
+/** A box from a0 to a1 px measured inwards from the face in direction dir, spanning c0..c1 across the other axes. */
+function axisBox(dir: number, a0: number, a1: number, c0 = 0, c1 = 16): PxBox {
+  const axis = dir >> 1;
+  const lo = [c0, c0, c0];
+  const hi = [c1, c1, c1];
+  const positive = dir % 2 === 0;
+  lo[axis] = positive ? 16 - a1 : a0;
+  hi[axis] = positive ? 16 - a0 : a1;
+  return [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]];
+}
+
+/** Relay / inverter: a thin slab with posts showing which way the signal goes (facing 0..3 as FACING_DIR). */
+function gateShape(state: number, inverter: boolean): PxBox[] {
+  const v = DIR_VEC[FACING_DIR[state & 3]];
+  const post = (d: number, h: number): PxBox => {
+    const cx = 8 + v[0] * d;
+    const cz = 8 + v[2] * d;
+    return [cx - 1, 2, cz - 1, cx + 1, h, cz + 1];
+  };
+  return inverter ? [[0, 0, 0, 16, 2, 16], post(4, 8)] : [[0, 0, 0, 16, 2, 16], post(-4, 5), post(4, 8)];
+}
+
 const TORCH_BOXES: PxBox[] = [[7, 0, 7, 9, 10, 9], [0, 3, 7, 2, 13, 9], [14, 3, 7, 16, 13, 9], [7, 3, 0, 9, 13, 2], [7, 3, 14, 9, 13, 16]];
 
 // --- Definitions -----------------------------------------------------------
@@ -124,6 +176,8 @@ function def(id: number, key: string, name: string, props: Props = {}): void {
     front: props.front,
     alt: props.alt,
     shape: props.shape,
+    texFn: props.texFn,
+    extraTex: props.extraTex,
     opaque: props.opaque ?? true,
     solid: props.solid ?? true,
     translucent: props.translucent ?? false,
@@ -200,6 +254,46 @@ def(B.ASHWOOD_DOOR, 'ashwood_door', 'Ashwood Door', {
 });
 def(B.ASHWOOD_SAPLING, 'ashwood_sapling', 'Ashwood Sapling', sapling);
 def(B.FROSTPINE_SAPLING, 'frostpine_sapling', 'Frostpine Sapling', sapling);
+def(B.FARMLAND, 'farmland', 'Farmland', {
+  tex: 'dirt', hardness: 0.6, tool: 'shovel',
+  texFn: (s, d) => (d === 2 ? (s & 1 ? 'farmland_wet' : 'farmland_dry') : 'dirt'), extraTex: ['farmland_dry', 'farmland_wet'],
+});
+const STAGES = Array.from({ length: 8 }, (_, i) => `sunwheat_${i}`);
+def(B.SUNWHEAT, 'sunwheat_crop', 'Sunwheat', { ...plant, replaceable: false, tex: 'sunwheat_0', texFn: (s) => STAGES[s & 7], extraTex: STAGES });
+const thin: Props = { render: 'box', opaque: false, solid: false, hardness: 0 };
+def(B.GLOWWIRE, 'glowwire', 'Glowwire', {
+  ...thin, tex: 'glowwire_off', shape: () => [[0, 0, 0, 16, 1, 16]],
+  texFn: (s) => (s > 0 ? 'glowwire_on' : 'glowwire_off'), extraTex: ['glowwire_off', 'glowwire_on'],
+});
+def(B.LEVER, 'lever', 'Lever', {
+  ...thin, tex: 'lever', hardness: 0.5,
+  shape: (s) => [[4, 0, 4, 12, 2, 12], s & POWER_ON ? [7, 2, 9, 9, 10, 11] : [7, 2, 5, 9, 10, 7]],
+});
+def(B.PRESSURE_PLATE, 'pressure_plate', 'Pressure Plate', {
+  ...thin, tex: 'pressure_plate', hardness: 0.5, shape: (s) => [[1, 0, 1, 15, s & POWER_ON ? 1 : 2, 15]],
+});
+def(B.POWER_CRYSTAL, 'power_crystal', 'Power Crystal', { lightEmit: 7, hardness: 1, tool: 'pickaxe' });
+const gateTex = (s: number) => (s & POWER_ON ? 'gate_on' : 'gate_off');
+def(B.RELAY, 'relay', 'Relay', { ...thin, tex: 'gate_off', shape: (s) => gateShape(s, false), texFn: gateTex, extraTex: ['gate_off', 'gate_on'] });
+def(B.INVERTER, 'inverter', 'Inverter', { ...thin, tex: 'gate_off', shape: (s) => gateShape(s, true), texFn: gateTex, extraTex: ['gate_off', 'gate_on'] });
+def(B.LAMP, 'lamp', 'Glow Lamp', { tex: 'lamp_off', hardness: 0.5 });
+def(B.LAMP_ON, 'lamp_on', 'Lit Glow Lamp', { tex: 'lamp_on', lightEmit: 15, hardness: 0.5 });
+def(B.PUSHER, 'pusher', 'Pusher', {
+  tex: 'pusher_side', hardness: 2, tool: 'pickaxe',
+  texFn: (s, d) => (d === (s & 7) ? (s & PUSHER_EXTENDED ? 'pusher_front_open' : 'pusher_front') : d === OPPOSITE_DIR[s & 7] ? 'pusher_back' : 'pusher_side'),
+  extraTex: ['pusher_side', 'pusher_front', 'pusher_front_open', 'pusher_back'],
+});
+def(B.PUSHER_HEAD, 'pusher_head', 'Pusher Head', {
+  render: 'box', opaque: false, tex: 'pusher_front', hardness: 2,
+  shape: (s) => [axisBox(s & 7, 0, 4), axisBox(s & 7, 4, 16, 6, 10)], // plate at the far face, rod back to the pusher
+});
+def(B.RIFT_STONE, 'rift_stone', 'Rift Stone', { tex: { top: 'rift_stone_top', bottom: 'rift_stone', side: 'rift_stone' }, hardness: 5, tool: 'pickaxe', harvest: 3 });
+def(B.RIFT, 'rift', 'Rift', { opaque: false, solid: false, translucent: true, lightEmit: 11, hardness: -1 });
+def(B.ASHSTONE, 'ashstone', 'Ashstone', stoneLike(1.5));
+def(B.EMBERSTONE, 'emberstone', 'Emberstone', { ...stoneLike(1.2), lightEmit: 10 });
+def(B.EMBER_ORE, 'ember_ore', 'Ember Ore', { ...stoneLike(3), harvest: 2 });
+def(B.MAGMA, 'magma', 'Magma', { render: 'liquid', opaque: false, solid: false, translucent: true, replaceable: true, lightEmit: 15, hardness: -1 });
+def(B.RUNE_TABLE, 'rune_table', 'Rune Table', { tex: { top: 'rune_table_top', bottom: 'cut_stone', side: 'rune_table_side' }, hardness: 3, tool: 'pickaxe', harvest: 1 });
 
 export const BLOCKS: readonly BlockDef[] = defs;
 
@@ -237,6 +331,7 @@ export const TEX_SIDE = new Uint8Array(MAX_ID);
 export const TEX_FRONT = new Uint8Array(MAX_ID);
 /** Alternate (upper-half) side layer + 1 (0 = none). */
 export const TEX_ALT = new Uint8Array(MAX_ID);
+const TEX_FN: Array<((state: number, dir: number) => string) | undefined> = [];
 
 const RENDER_CODE: Record<RenderKind, number> = { none: 0, cube: 1, cross: 2, liquid: 3, box: 4 };
 
@@ -256,6 +351,8 @@ for (const d of defs) {
     TEX_SIDE[d.id] = layer(d.tex.side);
     if (d.front) TEX_FRONT[d.id] = layer(d.front) + 1;
     if (d.alt) TEX_ALT[d.id] = layer(d.alt) + 1;
+    for (const t of d.extraTex ?? []) layer(t);
+    TEX_FN[d.id] = d.texFn;
   }
 }
 // Unknown ids behave as opaque so corrupted data never produces holes.
@@ -271,6 +368,8 @@ export function blockDef(id: number): BlockDef | undefined {
 /** Texture layer for one face (0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z) of a block value. */
 export function faceLayer(raw: number, dir: number): number {
   const id = raw & 0xfff;
+  const fn = TEX_FN[id];
+  if (fn) return layerOf.get(fn(raw >>> 12, dir)) ?? TEX_SIDE[id];
   if (dir === 2) return TEX_TOP[id];
   if (dir === 3) return TEX_BOTTOM[id];
   const state = raw >>> 12;

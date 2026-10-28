@@ -12,6 +12,7 @@ export const Mob = {
   THORNSLINGER: 11,
   SKITTERLING: 12,
   SPORECAP: 13,
+  TRADER: 20,
 } as const;
 
 export type MobKind = (typeof Mob)[keyof typeof Mob];
@@ -33,6 +34,8 @@ export interface MobDef {
   climber?: boolean;
   /** Takes damage in direct sunlight. */
   sunSensitive?: boolean;
+  /** Settlement trader: never spawns naturally, stays near home, opens trades on right-click. */
+  trader?: boolean;
   drops: (rnd: () => number) => ItemStack[];
 }
 
@@ -76,13 +79,18 @@ const DEFS: MobDef[] = [
   },
 ];
 
+DEFS.push({
+  kind: Mob.TRADER, key: 'trader', name: 'סוחר', hostile: false, width: 0.6, height: 1.9, health: 20, speed: 1.2, damage: 0,
+  trader: true, drops: () => [],
+});
+
 const byKind = new Map<number, MobDef>(DEFS.map((d) => [d.kind, d]));
 
 export function mobDef(kind: number): MobDef | undefined {
   return byKind.get(kind);
 }
 
-export const PASSIVE_MOBS = DEFS.filter((d) => !d.hostile).map((d) => d.kind);
+export const PASSIVE_MOBS = DEFS.filter((d) => !d.hostile && !d.trader).map((d) => d.kind);
 export const HOSTILE_MOBS = DEFS.filter((d) => d.hostile).map((d) => d.kind);
 
 /** Where passive herds may appear. */

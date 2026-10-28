@@ -1,10 +1,14 @@
-import { B, DOOR_OPEN, DOOR_UPPER, OPAQUE, RENDER, REPLACEABLE, SOLID, withState } from '../shared/blocks/registry';
+import { B, DIR_VEC, DOOR_OPEN, DOOR_UPPER, OPAQUE, POWER_ON, RENDER, REPLACEABLE, SOLID, withState } from '../shared/blocks/registry';
+import { isInteractive } from '../shared/blocks/placement';
+import { runeLevel, RUNE_BOUNTY, RUNE_ENDURE, RUNE_KEEN, RUNE_SWIFT } from '../shared/items/runes';
+import { isPowerBlock, isSignalBlock, PowerGrid } from './power';
 import { isSupported } from '../shared/blocks/placement';
-import { DAY_LENGTH_TICKS, GameMode, MAX_PLAYERS, PROTOCOL_VERSION, TICK_MS } from '../shared/constants';
+import { DAY_LENGTH_TICKS, GameMode, MAX_PLAYERS, PROTOCOL_VERSION, SEA_LEVEL, TICK_MS } from '../shared/constants';
+import { DEEP_ORIGIN, isDeep } from '../shared/world/dimensions';
 import { SMELT_TICKS, SMELTING } from '../shared/items/crafting';
 import { canMerge, copyStack, HOTBAR_SIZE, InvAction } from '../shared/items/Inventory';
 import { blockDrops, breakTime, EAT_TIME, REACH } from '../shared/items/mining';
-import { itemDef, maxStack, type ItemStack } from '../shared/items/registry';
+import { I, itemDef, maxStack, type ItemStack } from '../shared/items/registry';
 import { emptySlots, FURNACE_FUEL, FURNACE_INPUT, FURNACE_OUTPUT } from '../shared/items/Window';
 import { boxOverlapsBlock } from '../shared/physics/collision';
 import { EYE_HEIGHT, PLAYER_HEIGHT, PLAYER_WIDTH } from '../shared/physics/PlayerBody';
@@ -14,6 +18,8 @@ import type { BlockEntity } from '../shared/world/blockEntities';
 import { Chunk, chunkKey, idx } from '../shared/world/Chunk';
 import type { Transport } from '../net/Transport';
 import { ItemEntities } from './ItemEntities';
+import { settlementsTouching } from './worldgen/settlements';
+import { TRADES, type Trade } from '../shared/entities/trades';
 import { MobManager, type MobTarget } from './mobs/MobManager';
 import { Mob, mobDef, PLAYER_ATTACK_COOLDOWN, PLAYER_ATTACK_REACH } from '../shared/entities/mobs';
 import { MAX_AIR, MAX_FOOD, MAX_HEALTH, PlayerSession, type OpenWindow } from './PlayerSession';
@@ -47,6 +53,7 @@ const DEATH_MESSAGES: Record<string, string> = {
   starve: 'גוועת ברעב',
   thorn: 'נדקרת מקוץ של קוצן',
   spores: 'נחנקת בענן נבגים של פטריון',
+  magma: 'נשרפת במאגמה',
 };
 
 function deathMessage(cause: string): string {
@@ -59,6 +66,9 @@ function deathMessage(cause: string): string {
 }
 
 const posKey = (x: number, y: number, z: number) => `${x},${y},${z}`;
+
+/** Blocks whose drops a bounty rune can multiply. */
+const BOUNTY_BLOCKS = new Set<number>([B.COAL_ORE, B.IRON_ORE, B.GOLD_ORE, B.DIAMOND_ORE, B.EMBER_ORE, B.LUMEN_CRYSTAL, B.SUNWHEAT]);
 
 /** 1–16 characters: letters (any script), digits, space, _ and -. */
 export function sanitizeName(name: unknown): string | null {
@@ -82,6 +92,14 @@ export class GameServer {
   mobSpawning = true;
   time: number;
   private nextEntityId = 1;
+  readonly power: PowerGrid;
+  /** Same generator the workers use, for pure lookups (surface heights, settlements). */
+  private readonly generator: WorldGenerator;
+  private inPower = 0;
+  /** Relay/inverter evaluations due at a tick. */
+  private readonly scheduled = new Map<number, Vec3[]>();
+  /** Pressure plates currently pressed, by "x,y,z". */
+  private readonly pressedPlates = new Map<string, Vec3>();
   private readonly players = new Map<number, PlayerSession>();
   /** Furnaces that are burning or have work queued, by "x,y,z". */
   private readonly furnaces = new Map<string, Vec3>();
@@ -92,15 +110,33 @@ export class GameServer {
   private tickCount = 0;
   private saving: Promise<void> = Promise.resolve();
   /** Chunk offsets within the streaming radius, nearest first. */
-  private readonly offsets: Array<[number, number]>;
-  private readonly radius: number;
+  private readonly offsetCache = new Map<number, Array<[number, number]>>();
 
   constructor(readonly options: ServerOptions, generator: ChunkGenerator) {
     this.meta = options.meta;
     this.time = this.meta.time;
     this.world = new ServerWorld(generator, options.store);
     this.world.onLoad = (c) => this.chunkLoaded(c);
-    this.spawn = new WorldGenerator(this.meta.seed).findSpawn();
+    this.generator = new WorldGenerator(this.meta.seed);
+    this.spawn = this.generator.findSpawn();
+    this.power = new PowerGrid({
+      getRaw: (x, y, z) => this.world.getRaw(x, y, z),
+      setRaw: (x, y, z, raw) => {
+        this.inPower++;
+        try {
+          this.setBlockAndBroadcast(x, y, z, raw);
+        } finally {
+          this.inPower--;
+        }
+      },
+      hasBlockEntity: (x, y, z) => !!this.world.getBlockEntity(x, y, z),
+      schedule: (ticks, x, y, z) => {
+        const at = this.tickCount + ticks;
+        const list = this.scheduled.get(at) ?? [];
+        if (!list.some(([a, b, c]) => a === x && b === y && c === z)) list.push([x, y, z]);
+        this.scheduled.set(at, list);
+      },
+    });
     const allocId = () => this.nextEntityId++;
     this.mobs = new MobManager(this.world, allocId, {
       spawned: (info) => this.toChunkViewers(info.x, info.z, { t: 'entitySpawn', entity: info }),
@@ -130,16 +166,25 @@ export class GameServer {
         }
       },
     });
-    // One ring beyond the view distance so clients can mesh the visible edge.
-    this.radius = options.viewDistance + 1;
-    const offsets: Array<[number, number]> = [];
-    for (let dz = -this.radius; dz <= this.radius; dz++) {
-      for (let dx = -this.radius; dx <= this.radius; dx++) {
-        if (dx * dx + dz * dz <= this.radius * this.radius + this.radius) offsets.push([dx, dz]);
+  }
+
+  /** Chunk offsets within a streaming radius, nearest first. */
+  private offsets(radius: number): Array<[number, number]> {
+    let list = this.offsetCache.get(radius);
+    if (!list) {
+      list = [];
+      for (let dz = -radius; dz <= radius; dz++) {
+        for (let dx = -radius; dx <= radius; dx++) if (dx * dx + dz * dz <= radius * radius + radius) list.push([dx, dz]);
       }
+      list.sort((a, b) => a[0] * a[0] + a[1] * a[1] - (b[0] * b[0] + b[1] * b[1]));
+      this.offsetCache.set(radius, list);
     }
-    offsets.sort((a, b) => a[0] * a[0] + a[1] * a[1] - (b[0] * b[0] + b[1] * b[1]));
-    this.offsets = offsets;
+    return list;
+  }
+
+  /** Streaming radius for a player: one ring beyond their view distance so the visible edge can be meshed. */
+  private radiusOf(p: PlayerSession): number {
+    return (p.viewDistance || this.options.viewDistance) + 1;
   }
 
   get seed(): number {
@@ -269,6 +314,15 @@ export class GameServer {
       case 'attack':
         this.attack(p, msg.entityId | 0);
         break;
+      case 'interact':
+        this.interact(p, msg.entityId | 0);
+        break;
+      case 'trade':
+        this.trade(p, msg.entityId | 0, msg.offer | 0);
+        break;
+      case 'settings':
+        if (Number.isFinite(msg.viewDistance)) p.viewDistance = Math.max(2, Math.min(12, Math.round(msg.viewDistance)));
+        break;
       case 'pong':
         if (p.pendingPing && p.pendingPing.id === msg.id) {
           p.rtt = performance.now() - p.pendingPing.at;
@@ -357,8 +411,38 @@ export class GameServer {
   }
 
   private setBlockAndBroadcast(x: number, y: number, z: number, raw: number): void {
+    const old = this.world.getRaw(x, y, z);
     if (!this.world.setBlock(x, y, z, raw)) return;
     this.toChunkViewers(x, z, { t: 'blockChange', x, y, z, id: raw });
+    if (this.inPower === 0 && this.nearPower(x, y, z, old, raw)) {
+      this.inPower++;
+      try {
+        this.power.update(x, y, z, isSignalBlock(old & 0xfff) || isSignalBlock(raw & 0xfff));
+      } finally {
+        this.inPower--;
+      }
+    }
+  }
+
+  /** True if a change at (x, y, z) can affect a signal (the block or a neighbour is power-related). */
+  private nearPower(x: number, y: number, z: number, old: number, raw: number): boolean {
+    if (isPowerBlock(old & 0xfff) || isPowerBlock(raw & 0xfff)) return true;
+    for (const [dx, dy, dz] of DIR_VEC) if (isPowerBlock(this.world.getBlock(x + dx, y + dy, z + dz))) return true;
+    return false;
+  }
+
+  /** Wears a tool by `amount`; endurance runes may spare it. */
+  private wearTool(p: PlayerSession, amount: number): void {
+    const held = p.inventory.held;
+    const tool = held ? itemDef(held.id)?.tool : undefined;
+    if (!held || !tool || p.creative) return;
+    if (Math.random() >= 1 / (runeLevel(held, RUNE_ENDURE) + 1)) return;
+    held.dmg = (held.dmg ?? 0) + amount;
+    if (held.dmg >= tool.durability) {
+      p.inventory.slots[p.inventory.selected] = null;
+      this.chat(p, `${itemDef(held.id)?.name} נשבר!`);
+    }
+    p.sendInventory();
   }
 
   // --- Movement, health, hunger --------------------------------------------------
@@ -420,6 +504,14 @@ export class GameServer {
       p.sendStats();
       return;
     }
+    const feetBlock = this.world.getBlock(Math.floor(p.pos[0]), Math.floor(p.pos[1] + 0.2), Math.floor(p.pos[2]));
+    // Rifts: stand inside one for two seconds to cross over.
+    if (p.riftCooldown > 0) p.riftCooldown--;
+    if (feetBlock === B.RIFT && p.riftCooldown === 0 && !p.travelling) {
+      if (++p.riftTicks >= 40) void this.travel(p);
+    } else p.riftTicks = 0;
+    if (feetBlock === B.MAGMA && this.tickCount % 10 === 0) this.damage(p, 3, 'magma');
+    if (!p.alive) return;
     const eye = this.world.getBlock(Math.floor(p.pos[0]), Math.floor(p.pos[1] + EYE_HEIGHT), Math.floor(p.pos[2]));
     if (eye === B.WATER) {
       p.air = Math.max(-1, p.air - 1);
@@ -484,17 +576,49 @@ export class GameServer {
     p.swingUntil = now + 300;
     const held = p.inventory.held;
     const tool = held ? itemDef(held.id)?.tool : undefined;
-    const dmg = !tool ? 1 : tool.kind === 'sword' ? tool.damage : tool.kind === 'axe' ? tool.damage - 1 : 2;
+    const base = !tool ? 1 : tool.kind === 'sword' ? tool.damage : tool.kind === 'axe' ? tool.damage - 1 : 2;
+    const dmg = base + runeLevel(held, RUNE_KEEN);
     if (!this.mobs.hit(mobId, dmg, p.pos)) return;
     p.addExhaustion(0.1);
-    if (held && tool && !p.creative) {
-      held.dmg = (held.dmg ?? 0) + (tool.kind === 'sword' ? 1 : 2);
-      if (held.dmg >= tool.durability) {
-        p.inventory.slots[p.inventory.selected] = null;
-        this.chat(p, `${itemDef(held.id)?.name} נשבר!`);
-      }
+    if (tool) this.wearTool(p, tool.kind === 'sword' ? 1 : 2);
+  }
+
+  private traderFor(p: PlayerSession, id: number): { offers: Trade[]; profession: number } | null {
+    const m = this.mobs.mobs.get(id);
+    if (!m || !m.def.trader || m.deadTicks > 0) return null;
+    if (Math.hypot(m.body.x - p.pos[0], m.body.y - p.pos[1], m.body.z - p.pos[2]) > PLAYER_ATTACK_REACH + REACH_SLACK + 1) return null;
+    const profession = m.variant ?? 0;
+    return { offers: TRADES[profession] ?? [], profession };
+  }
+
+  private interact(p: PlayerSession, id: number): void {
+    const t = this.traderFor(p, id);
+    if (t) p.send({ t: 'trades', entityId: id, profession: t.profession, offers: t.offers });
+  }
+
+  private trade(p: PlayerSession, id: number, offer: number): void {
+    const t = this.traderFor(p, id);
+    const o = t?.offers[offer];
+    if (!o || p.dead) return;
+    const inv = p.inventory;
+    const have = (item: number) => inv.slots.reduce((n, s) => n + (s && s.id === item && !s.dmg && !s.runes ? s.count : 0), 0);
+    if (!o.give.every((g) => have(g.id) >= g.count)) {
       p.sendInventory();
+      return;
     }
+    for (const g of o.give) {
+      let left = g.count;
+      for (let i = 0; i < inv.slots.length && left > 0; i++) {
+        const s = inv.slots[i];
+        if (!s || s.id !== g.id || s.dmg || s.runes) continue;
+        const n = Math.min(left, s.count);
+        inv.take(i, n);
+        left -= n;
+      }
+    }
+    const extra = inv.addStack({ ...o.get });
+    if (extra > 0) this.throwItem(p, { ...o.get, count: extra });
+    p.sendInventory();
   }
 
   private damage(p: PlayerSession, amount: number, cause: string): void {
@@ -573,7 +697,7 @@ export class GameServer {
     const heldDef = held ? itemDef(held.id) : undefined;
     let ok = target && this.inReach(p, x, y, z);
     if (ok && !p.creative) {
-      const need = breakTime(id, heldDef, false);
+      const need = breakTime(id, heldDef, false, runeLevel(held, RUNE_SWIFT));
       const d = p.dig;
       const elapsed = d && d.x === x && d.y === y && d.z === z ? (performance.now() - d.start) / 1000 : 0;
       ok = Number.isFinite(need) && elapsed >= need * TIME_TOLERANCE - 0.1;
@@ -583,22 +707,15 @@ export class GameServer {
       this.revert(p, x, y, z);
       return;
     }
-    this.breakBlock(x, y, z, raw, !p.creative, heldDef);
+    this.breakBlock(x, y, z, raw, !p.creative, heldDef, runeLevel(held, RUNE_BOUNTY));
     if (!p.creative) {
       p.addExhaustion(0.005);
-      if (held && heldDef?.tool && breakTime(id, undefined, false) > 0) {
-        held.dmg = (held.dmg ?? 0) + (heldDef.tool.kind === 'sword' ? 2 : 1);
-        if (held.dmg >= heldDef.tool.durability) {
-          p.inventory.slots[p.inventory.selected] = null;
-          this.chat(p, `${heldDef.name} נשבר!`);
-        }
-        p.sendInventory();
-      }
+      if (heldDef?.tool && breakTime(id, undefined, false) > 0) this.wearTool(p, heldDef.tool.kind === 'sword' ? 2 : 1);
     }
   }
 
   /** Removes a block, drops what it yields (and its contents), and pops blocks it was holding up. */
-  private breakBlock(x: number, y: number, z: number, raw: number, drops: boolean, held: ReturnType<typeof itemDef>): void {
+  private breakBlock(x: number, y: number, z: number, raw: number, drops: boolean, held: ReturnType<typeof itemDef>, bounty = 0): void {
     this.setBlockAndBroadcast(x, y, z, B.AIR);
     const be = this.world.getBlockEntity(x, y, z);
     if (be) {
@@ -609,7 +726,12 @@ export class GameServer {
       for (const v of this.viewers.get(posKey(x, y, z)) ?? []) this.closeWindow(v, v.window?.id ?? -1, true);
       this.viewers.delete(posKey(x, y, z));
     }
-    if (drops) this.items.spawnDrops(blockDrops(raw, held, Math.random), x, y, z);
+    if (drops) {
+      const items = blockDrops(raw, held, Math.random);
+      // Bounty runes: ores and ripe crops may give extra.
+      if (bounty > 0 && BOUNTY_BLOCKS.has(raw & 0xfff)) for (const it of items) it.count += Math.floor(Math.random() * (bounty + 1));
+      this.items.spawnDrops(items, x, y, z);
+    }
     this.cascadeSupport(x, y, z, drops);
   }
 
@@ -644,6 +766,8 @@ export class GameServer {
     // Only orientations a player could produce.
     if (ok) {
       if (id === B.TORCH) ok = state <= 4;
+      else if (id === B.RELAY || id === B.INVERTER) ok = state <= 3;
+      else if (id === B.PUSHER) ok = state <= 5;
       else if (id === B.FURNACE || id === B.CHEST) ok = state <= 3;
       else if (door) ok = state <= 3;
       else ok = state === 0;
@@ -729,12 +853,130 @@ export class GameServer {
       case B.BEDROLL:
         this.sleep(p, x, y, z);
         break;
-      default:
+      case B.LEVER:
+        this.setBlockAndBroadcast(x, y, z, raw ^ (POWER_ON << 12));
         break;
+      case B.RUNE_TABLE:
+        this.closeWindows(p);
+        p.openWindow('runetable', emptySlots('runetable'), [x, y, z]);
+        this.sendWindow(p, p.window);
+        break;
+      case B.RIFT_STONE:
+        this.igniteRift(p, x, y, z);
+        break;
+      case B.SUNWHEAT: {
+        // Spore powder makes crops grow.
+        const held = p.inventory.held;
+        if (held?.id !== I.SPORE_POWDER || (raw >>> 12) >= 7) break;
+        this.setBlockAndBroadcast(x, y, z, withState(B.SUNWHEAT, Math.min(7, (raw >>> 12) + 2 + Math.floor(Math.random() * 3))));
+        if (!p.creative) {
+          p.inventory.take(p.inventory.selected, 1);
+          p.sendInventory();
+        }
+        break;
+      }
+      default: {
+        // Tilling: a shovel turns grass or dirt with air above into farmland.
+        const held = p.inventory.held;
+        if (!held || !isInteractive(id, held.id)) break;
+        if (this.world.getBlock(x, y + 1, z) !== B.AIR) break;
+        this.setBlockAndBroadcast(x, y, z, B.FARMLAND);
+        this.wearTool(p, 1);
+        break;
+      }
     }
   }
 
+  // --- Rifts and the Ember Deep -------------------------------------------------
+
+  /** Lumen dust on a rift stone ringed by four lumen crystals (diagonal corners) opens a rift. */
+  private igniteRift(p: PlayerSession, x: number, y: number, z: number): void {
+    const held = p.inventory.held;
+    if (held?.id !== I.LUMEN_DUST) return;
+    const corners = [[1, 1], [1, -1], [-1, 1], [-1, -1]].every(([dx, dz]) => this.world.getBlock(x + dx, y, z + dz) === B.LUMEN_CRYSTAL);
+    if (!corners) {
+      this.chat(p, 'הטקס דורש גביש לומן בכל אחת מארבע הפינות האלכסוניות של אבן הבקע.');
+      return;
+    }
+    for (const dy of [1, 2]) {
+      const b = this.world.getBlock(x, y + dy, z);
+      if (b !== B.AIR && !REPLACEABLE[b]) {
+        this.chat(p, 'צריך שני בלוקים פנויים מעל אבן הבקע.');
+        return;
+      }
+    }
+    this.setBlockAndBroadcast(x, y + 1, z, B.RIFT);
+    this.setBlockAndBroadcast(x, y + 2, z, B.RIFT);
+    if (!p.creative) {
+      p.inventory.take(p.inventory.selected, 1);
+      p.sendInventory();
+    }
+    this.chat(p, isDeep(x) ? 'הבקע נפתח! עמדו בתוכו כדי לחזור אל פני השטח.' : 'הבקע נפתח! עמדו בתוכו כדי לרדת אל עמקי הגחלים.');
+  }
+
+  /** Moves a player through a rift to the matching place in the other world, building a rift there if needed. */
+  private async travel(p: PlayerSession): Promise<void> {
+    p.travelling = true;
+    p.riftTicks = 0;
+    try {
+      const toDeep = !isDeep(p.pos[0]);
+      const tx = Math.floor(p.pos[0]) + (toDeep ? DEEP_ORIGIN : -DEEP_ORIGIN);
+      const tz = Math.floor(p.pos[2]);
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) await this.world.ensureChunk((tx >> 4) + dx, (tz >> 4) + dz);
+      if (!this.players.has(p.id) || !p.alive) return;
+      const dest = this.findRift(tx, tz) ?? this.buildAltar(tx, tz, toDeep, p.pos[1]);
+      p.riftCooldown = 100;
+      this.closeWindows(p);
+      this.teleport(p, dest);
+      this.chat(p, toDeep ? 'ירדת אל עמקי הגחלים. היזהרו מהמאגמה!' : 'חזרת אל פני השטח.');
+    } finally {
+      p.travelling = false;
+    }
+  }
+
+  /** An existing rift near (x, z): returns a free spot next to it. */
+  private findRift(x: number, z: number): Vec3 | null {
+    for (let dz = -6; dz <= 6; dz++) for (let dx = -6; dx <= 6; dx++) {
+      for (let y = 1; y < 250; y++) {
+        if (this.world.getBlock(x + dx, y, z + dz) !== B.RIFT || this.world.getBlock(x + dx, y - 1, z + dz) !== B.RIFT_STONE) continue;
+        for (const [ox, oz] of [[0, 2], [0, -2], [2, 0], [-2, 0], [1, 2], [-1, -2]]) {
+          const ax = x + dx + ox;
+          const az = z + dz + oz;
+          if (this.world.boxes(ax, y, az) === null && this.world.boxes(ax, y + 1, az) === null && this.world.boxes(ax, y - 1, az) !== null) {
+            return [ax + 0.5, y, az + 0.5];
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Builds a lit rift altar at (x, z) in the destination world and returns where to stand. */
+  private buildAltar(x: number, z: number, deep: boolean, fromY: number): Vec3 {
+    const floor = deep ? B.ASHSTONE : B.CUT_STONE;
+    let y: number;
+    if (deep) {
+      y = Math.max(30, Math.min(100, Math.floor(fromY)));
+      for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) for (let dy = 0; dy < 4; dy++) this.setBlockAndBroadcast(x + dx, y + dy, z + dz, B.AIR);
+    } else {
+      y = Math.max(this.generator.column(x, z).height, SEA_LEVEL) + 1;
+      for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) for (let dy = 0; dy < 4; dy++) this.setBlockAndBroadcast(x + dx, y + dy, z + dz, B.AIR);
+    }
+    for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) {
+      const corner = Math.abs(dx) === 1 && Math.abs(dz) === 1;
+      const id = dx === 0 && dz === 0 ? B.RIFT_STONE : corner ? B.LUMEN_CRYSTAL : floor;
+      this.setBlockAndBroadcast(x + dx, y - 1, z + dz, id);
+    }
+    this.setBlockAndBroadcast(x, y, z, B.RIFT);
+    this.setBlockAndBroadcast(x, y + 1, z, B.RIFT);
+    return [x + 0.5, y, z + 2.5];
+  }
+
   private sleep(p: PlayerSession, x: number, y: number, z: number): void {
+    if (isDeep(x)) {
+      this.chat(p, 'בעמקי הגחלים אין יום ולילה, ושק השינה לא נדלק כאן.');
+      return;
+    }
     p.spawnPoint = [x + 0.5, y + 1, z + 0.5];
     const day = this.dayTime;
     if (day < NIGHT_START || day >= NIGHT_END) {
@@ -966,7 +1208,48 @@ export class GameServer {
     }
   }
 
+  private tickPower(): void {
+    const due = this.scheduled.get(this.tickCount);
+    if (due) {
+      this.scheduled.delete(this.tickCount);
+      this.inPower++;
+      try {
+        for (const [x, y, z] of due) this.power.gateTick(x, y, z);
+      } finally {
+        this.inPower--;
+      }
+    }
+    // Pressure plates: pressed while a player or creature stands on them.
+    const occupied = new Map<string, Vec3>();
+    const feet = (x: number, y: number, z: number) => {
+      const p: Vec3 = [Math.floor(x), Math.floor(y + 0.05), Math.floor(z)];
+      if (this.world.getBlock(...p) === B.PRESSURE_PLATE) occupied.set(posKey(...p), p);
+    };
+    for (const p of this.players.values()) if (p.alive) feet(...(p.pos as Vec3));
+    for (const m of this.mobs.mobs.values()) feet(m.body.x, m.body.y, m.body.z);
+    for (const [k, p] of this.pressedPlates) {
+      if (occupied.has(k)) continue;
+      this.pressedPlates.delete(k);
+      if (this.world.getBlock(...p) === B.PRESSURE_PLATE) this.setBlockAndBroadcast(...p, B.PRESSURE_PLATE);
+    }
+    for (const [k, p] of occupied) {
+      if (this.pressedPlates.has(k)) continue;
+      this.pressedPlates.set(k, p);
+      this.setBlockAndBroadcast(...p, withState(B.PRESSURE_PLATE, POWER_ON));
+    }
+  }
+
   private chunkLoaded(c: Chunk): void {
+    // Settlement centres in this chunk get their traders (they aren't saved; they return with the chunk).
+    if (!isDeep(c.cx * 16)) {
+      for (const st of settlementsTouching(this.generator, c.cx * 16, c.cz * 16, c.cx * 16 + 15, c.cz * 16 + 15)) {
+        if (st.x >> 4 !== c.cx || st.z >> 4 !== c.cz || this.mobs.tradersNear(st.x, st.z, 40) > 0) continue;
+        for (let i = 0; i < 3; i++) {
+          const a = (i / 3) * Math.PI * 2;
+          this.mobs.spawn(Mob.TRADER, st.x + 0.5 + Math.cos(a) * 3, st.y + 1, st.z + 0.5 + Math.sin(a) * 3, { variant: i, home: [st.x + 0.5, st.z + 0.5] });
+        }
+      }
+    }
     for (const [i, be] of c.blockEntities) {
       if (be.kind === 'furnace' && (be.burn > 0 || be.slots[FURNACE_INPUT])) {
         const pos: Vec3 = [c.cx * 16 + (i & 15), i >> 8, c.cz * 16 + ((i >> 4) & 15)];
@@ -987,9 +1270,24 @@ export class GameServer {
           const lz = (Math.random() * 16) | 0;
           if (ly >= 255) continue;
           const id = c.blocks[idx(lx, ly, lz)] & 0xfff;
-          if (id !== B.DIRT && id !== B.GRASS && id !== B.ASHWOOD_SAPLING && id !== B.FROSTPINE_SAPLING) continue;
+          if (id !== B.DIRT && id !== B.GRASS && id !== B.ASHWOOD_SAPLING && id !== B.FROSTPINE_SAPLING && id !== B.SUNWHEAT && id !== B.FARMLAND) continue;
           const x = c.cx * 16 + lx;
           const z = c.cz * 16 + lz;
+          if (id === B.SUNWHEAT) {
+            const stage = c.blocks[idx(lx, ly, lz)] >>> 12;
+            const wet = (c.blocks[idx(lx, ly - 1, lz)] >>> 12) & 1;
+            if (stage < 7 && (c.light[idx(lx, ly, lz)] >> 4) >= 9 && Math.random() < (wet ? 0.35 : 0.12)) {
+              this.setBlockAndBroadcast(x, ly, z, withState(B.SUNWHEAT, stage + 1));
+            }
+            continue;
+          }
+          if (id === B.FARMLAND) {
+            const wet = this.waterNear(x, ly, z) ? 1 : 0;
+            const above = c.blocks[idx(lx, ly + 1, lz)] & 0xfff;
+            if (!wet && above !== B.SUNWHEAT && Math.random() < 0.1) this.setBlockAndBroadcast(x, ly, z, B.DIRT);
+            else if (((c.blocks[idx(lx, ly, lz)] >>> 12) & 1) !== wet) this.setBlockAndBroadcast(x, ly, z, withState(B.FARMLAND, wet));
+            continue;
+          }
           const above = c.blocks[idx(lx, ly + 1, lz)] & 0xfff;
           const skyAbove = c.light[idx(lx, ly + 1, lz)] >> 4;
           if (id === B.GRASS) {
@@ -1002,6 +1300,14 @@ export class GameServer {
         }
       }
     }
+  }
+
+  /** Water within 4 blocks horizontally, at the same level or one above. */
+  private waterNear(x: number, y: number, z: number): boolean {
+    for (let dy = 0; dy <= 1; dy++) for (let dz = -4; dz <= 4; dz++) for (let dx = -4; dx <= 4; dx++) {
+      if (this.world.getBlock(x + dx, y + dy, z + dz) === B.WATER) return true;
+    }
+    return false;
   }
 
   private grassNear(x: number, y: number, z: number): boolean {
@@ -1058,6 +1364,7 @@ export class GameServer {
     this.mobs.tick(targets, this.time, this.tickCount);
     if (this.mobSpawning && this.tickCount % 20 === 0) this.mobs.spawnTick(targets, this.time);
     this.tickFurnaces();
+    this.tickPower();
     this.randomTicks();
     if (this.tickCount % 100 === 0) this.unloadFarChunks();
     if (this.tickCount % AUTOSAVE_TICKS === 0) void this.save();
@@ -1089,7 +1396,8 @@ export class GameServer {
     const pcz = Math.floor(p.pos[2] / 16);
     let sent = 0;
     let saturated = false;
-    for (const [dx, dz] of this.offsets) {
+    const radius = this.radiusOf(p);
+    for (const [dx, dz] of this.offsets(radius)) {
       const cx = pcx + dx;
       const cz = pcz + dz;
       const key = chunkKey(cx, cz);
@@ -1109,7 +1417,7 @@ export class GameServer {
       if (saturated && sent >= MAX_CHUNKS_PER_TICK) break;
     }
 
-    const limit = (this.radius + 1) * (this.radius + 1);
+    const limit = (radius + 1) * (radius + 1);
     for (const [key, [cx, cz]] of p.sent) {
       const dx = cx - pcx;
       const dz = cz - pcz;
@@ -1121,9 +1429,8 @@ export class GameServer {
   }
 
   private unloadFarChunks(): void {
-    const keepR = (this.radius + 2) * (this.radius + 2);
-    const centers = [...this.players.values()].map((p) => [Math.floor(p.pos[0] / 16), Math.floor(p.pos[2] / 16)]);
-    const keep = (cx: number, cz: number) => centers.some(([px, pz]) => (cx - px) ** 2 + (cz - pz) ** 2 <= keepR);
+    const centers = [...this.players.values()].map((p) => [Math.floor(p.pos[0] / 16), Math.floor(p.pos[2] / 16), (this.radiusOf(p) + 2) ** 2]);
+    const keep = (cx: number, cz: number) => centers.some(([px, pz, r2]) => (cx - px) ** 2 + (cz - pz) ** 2 <= r2);
     const unsaved = this.world.unloadWhere(keep);
     // Creatures and items on unloaded ground vanish (they are not saved).
     this.mobs.removeWhere((x, z) => !keep(Math.floor(x) >> 4, Math.floor(z) >> 4));

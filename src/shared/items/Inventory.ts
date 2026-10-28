@@ -25,10 +25,17 @@ export const InvAction = {
   CREATIVE_SLOT: 3,
 } as const;
 
-export const copyStack = (s: Slot): Slot => (s ? (s.dmg ? { id: s.id, count: s.count, dmg: s.dmg } : { id: s.id, count: s.count }) : null);
+export const copyStack = (s: Slot): Slot => {
+  if (!s) return null;
+  const out: ItemStack = { id: s.id, count: s.count };
+  if (s.dmg) out.dmg = s.dmg;
+  if (s.runes) out.runes = [...s.runes];
+  return out;
+};
 
-/** Two stacks can merge when they are the same item and neither is damaged. */
-export const canMerge = (a: ItemStack, b: ItemStack): boolean => a.id === b.id && !a.dmg && !b.dmg && maxStack(a.id) > 1;
+/** Two stacks can merge when they are the same plain item (no damage, no runes). */
+export const canMerge = (a: ItemStack, b: ItemStack): boolean =>
+  a.id === b.id && !a.dmg && !b.dmg && !a.runes && !b.runes && maxStack(a.id) > 1;
 
 export class Inventory {
   slots: Slot[] = new Array<Slot>(INVENTORY_SIZE).fill(null);
@@ -57,7 +64,7 @@ export class Inventory {
   addStack(stack: ItemStack): number {
     let count = stack.count;
     const max = maxStack(stack.id);
-    if (!stack.dmg) {
+    if (!stack.dmg && !stack.runes) {
       for (let i = 0; i < INVENTORY_SIZE && count > 0; i++) {
         const s = this.slots[i];
         if (s && canMerge(s, stack) && s.count < max) {
@@ -70,7 +77,7 @@ export class Inventory {
     for (let i = 0; i < INVENTORY_SIZE && count > 0; i++) {
       if (!this.slots[i]) {
         const n = Math.min(count, max);
-        this.slots[i] = stack.dmg ? { id: stack.id, count: n, dmg: stack.dmg } : { id: stack.id, count: n };
+        this.slots[i] = { ...copyStack(stack)!, count: n };
         count -= n;
       }
     }
@@ -83,7 +90,7 @@ export class Inventory {
     let room = 0;
     for (const s of this.slots) {
       if (!s) room += max;
-      else if (!stack.dmg && canMerge(s, stack)) room += max - s.count;
+      else if (canMerge(s, stack)) room += max - s.count;
       if (room >= stack.count) return true;
     }
     return false;
@@ -123,5 +130,8 @@ export function sanitize(s: Slot): Slot {
   if (!s || !Number.isInteger(s.id) || !Number.isInteger(s.count) || s.count <= 0) return null;
   const out: ItemStack = { id: s.id, count: Math.min(s.count, maxStack(s.id)) };
   if (s.dmg && Number.isInteger(s.dmg) && s.dmg > 0) out.dmg = s.dmg;
+  if (Array.isArray(s.runes) && s.runes.length === 4 && s.runes.every((l) => Number.isInteger(l) && l >= 0 && l <= 3)) {
+    if (s.runes.some((l) => l > 0)) out.runes = [...s.runes];
+  }
   return out;
 }

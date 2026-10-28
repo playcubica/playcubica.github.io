@@ -54,6 +54,9 @@ export interface MobEntity {
   shootCooldown: number;
   anim: number;
   sent: [number, number, number, number];
+  /** Traders: profession index and the settlement centre they stay near. */
+  variant?: number;
+  home?: [number, number];
 }
 
 interface Thorn {
@@ -93,10 +96,10 @@ export class MobManager {
   }
 
   static info(m: MobEntity): EntityInfo {
-    return { id: m.id, kind: 'mob', mob: m.def.kind, x: m.body.x, y: m.body.y, z: m.body.z, yaw: m.yaw };
+    return { id: m.id, kind: 'mob', mob: m.def.kind, x: m.body.x, y: m.body.y, z: m.body.z, yaw: m.yaw, variant: m.variant };
   }
 
-  spawn(kind: number, x: number, y: number, z: number): MobEntity | null {
+  spawn(kind: number, x: number, y: number, z: number, extra: { variant?: number; home?: [number, number] } = {}): MobEntity | null {
     const def = mobDef(kind);
     if (!def) return null;
     const body = new PlayerBody();
@@ -111,6 +114,7 @@ export class MobManager {
       id: this.nextId(), def, body, yaw: Math.random() * Math.PI * 2, health: def.health, hurtTicks: 0, deadTicks: 0,
       attackCooldown: 0, path: null, pathGoal: null, pathAge: 0, wanderTimer: Math.floor(Math.random() * 100), fleeTicks: 0,
       fleeFrom: [x, z], targetId: null, fuse: 0, sporeCooldown: 0, shootCooldown: 40, anim: 0, sent: [x, y, z, 0],
+      variant: extra.variant, home: extra.home,
     };
     this.mobs.set(m.id, m);
     this.events.spawned(MobManager.info(m));
@@ -133,6 +137,12 @@ export class MobManager {
       if (Math.floor(m.body.x) >> 4 === cx && Math.floor(m.body.z) >> 4 === cz && m.deadTicks === 0) out.push(MobManager.info(m));
     }
     return out;
+  }
+
+  tradersNear(x: number, z: number, r: number): number {
+    let n = 0;
+    for (const m of this.mobs.values()) if (m.def.trader && Math.hypot(m.body.x - x, m.body.z - z) < r) n++;
+    return n;
   }
 
   hostilesNear(x: number, y: number, z: number, r: number): number {
@@ -159,7 +169,7 @@ export class MobManager {
       this.events.event(m.id, 'death', m.body.x, m.body.z);
       this.events.drops(m.def.drops(Math.random), Math.floor(m.body.x), Math.floor(m.body.y), Math.floor(m.body.z));
     } else if (!m.def.hostile) {
-      m.fleeTicks = 80;
+      m.fleeTicks = m.def.trader ? 30 : 80;
       m.fleeFrom = [from[0], from[2]];
       m.path = null;
     }
@@ -178,7 +188,8 @@ export class MobManager {
       const b = m.body;
       let nearest = Infinity;
       for (const p of players) nearest = Math.min(nearest, Math.hypot(p.pos[0] - b.x, p.pos[2] - b.z));
-      if (nearest > DESPAWN_FAR || b.y < -16 || (m.def.hostile && nearest > 40 && Math.random() < 1 / 600)) {
+      // Traders stay with their settlement; they go away only with its chunk.
+      if (b.y < -16 || (!m.def.trader && (nearest > DESPAWN_FAR || (m.def.hostile && nearest > 40 && Math.random() < 1 / 600)))) {
         this.remove(m.id);
         continue;
       }
@@ -264,7 +275,11 @@ export class MobManager {
       return input;
     }
 
-    // Passive.
+    // Passive. Traders drift back home when they wander too far.
+    if (m.home && m.fleeTicks === 0 && Math.hypot(b.x - m.home[0], b.z - m.home[1]) > 10) {
+      this.walkTo(m, input, [Math.floor(m.home[0]), Math.floor(b.y), Math.floor(m.home[1])]);
+      return input;
+    }
     if (m.fleeTicks > 0) {
       m.fleeTicks--;
       b.walkSpeed = m.def.speed * 2.2;

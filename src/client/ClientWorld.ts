@@ -68,8 +68,10 @@ export class ClientWorld implements ChunkSource, WorldQuery {
     return c ? c.blocks[idx(x & 15, y, z & 15)] : 0;
   }
 
+  /** Liquids you swim in (water, and slowly through magma). */
   isWater(x: number, y: number, z: number): boolean {
-    return this.getBlock(x, y, z) === B.WATER;
+    const id = this.getBlock(x, y, z);
+    return id === B.WATER || id === B.MAGMA;
   }
 
   /** True when the chunk and all 8 neighbours are present (required before meshing). */

@@ -64,6 +64,12 @@ export class PlayerSession {
   pendingPing: { id: number; at: number } | null = null;
   /** Ticks left during which creatures can't hurt this player again. */
   hurtCooldown = 0;
+  /** View distance the client asked for (0 = the world's default). */
+  viewDistance = 0;
+  /** Ticks spent standing in a rift, and ticks before another rift trip is allowed. */
+  riftTicks = 0;
+  riftCooldown = 0;
+  travelling = false;
   lastAttackAt = 0;
   rtt = -1;
   regenTimer = 0;

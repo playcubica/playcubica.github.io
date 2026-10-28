@@ -3,7 +3,7 @@ import { GameSession } from './game/GameSession';
 import { inviteLink, joinHost, normalizeInviteCode } from './net/peerNetwork';
 import { sanitizeName } from './server/GameServer';
 import { GameMode, newWorldMeta, WorldStorage, type WorldMeta } from './server/storage/WorldStorage';
-import { DEFAULT_VIEW_DISTANCE } from './shared/constants';
+import { loadSettings, saveSettings, type Settings } from './client/settings';
 import { randomSeed, seedFromString } from './shared/rng';
 
 // Menus (Hebrew, RTL) and the lifecycle of a game session.
@@ -60,7 +60,7 @@ export class App {
   private readonly screen: HTMLDivElement;
   private session: GameSession | null = null;
   private storage: WorldStorage | null = null;
-  private readonly viewDistance: number;
+  private settings: Settings = loadSettings();
   private playerName = loadName();
   /** Bumped on every screen change, so delayed refreshes know if their screen is still shown. */
   private screenToken = 0;
@@ -71,7 +71,7 @@ export class App {
     this.screen.dir = 'rtl';
     root.appendChild(this.screen);
     const vd = Number(new URLSearchParams(location.search).get('vd'));
-    this.viewDistance = Math.max(2, Math.min(16, vd || DEFAULT_VIEW_DISTANCE));
+    if (vd) this.settings.viewDistance = Math.max(2, Math.min(12, vd));
 
     // Best-effort save when the tab is hidden or closed.
     document.addEventListener('visibilitychange', () => {
@@ -116,8 +116,9 @@ export class App {
         <button class="btn" data-a="new">עולם חדש</button>
         <button class="btn" data-a="load">טען עולם</button>
         <button class="btn" data-a="join">הצטרף לחבר</button>
+        <button class="btn" data-a="settings">הגדרות</button>
         ${this.storage ? '' : '<p class="warn">הדפדפן לא מאפשר שמירה (IndexedDB). אפשר לשחק, אבל העולם לא יישמר.</p>'}
-        <p class="small">גרסה 0.4 · שלב 4</p>
+        <p class="small">גרסה 0.6 · שלב 6</p>
       </div>`, { menu: true });
     const nameInput = el<HTMLInputElement>(s, '[data-f=pname]');
     const nameOk = (): boolean => {
@@ -133,6 +134,7 @@ export class App {
     el(s, '[data-a=new]').onclick = () => nameOk() && this.newWorldMenu();
     el(s, '[data-a=load]').onclick = () => nameOk() && void this.loadMenu();
     el(s, '[data-a=join]').onclick = () => nameOk() && this.joinMenu();
+    el(s, '[data-a=settings]').onclick = () => this.settingsMenu(() => this.mainMenu());
   }
 
   private newWorldMenu(): void {
@@ -267,7 +269,7 @@ export class App {
         const { transport, leave } = await joinHost(code);
         history.replaceState(null, '', location.pathname);
         this.show('<div class="panel"><h2>מצטרף לעולם…</h2></div>', { menu: true });
-        this.session = GameSession.remote(this.root, transport, { viewDistance: this.viewDistance, playerName: name }, (st) => this.status(st), leave);
+        this.session = GameSession.remote(this.root, transport, { viewDistance: this.settings.viewDistance, playerName: name, settings: this.settings }, (st) => this.status(st), leave);
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err));
       }
@@ -279,7 +281,7 @@ export class App {
   private play(meta: WorldMeta): void {
     this.show('<div class="panel"><h2>טוען עולם…</h2></div>', { menu: true });
     try {
-      this.session = GameSession.host(this.root, meta, this.storage, { viewDistance: this.viewDistance, playerName: this.playerName }, (st) => this.status(st));
+      this.session = GameSession.host(this.root, meta, this.storage, { viewDistance: this.settings.viewDistance, playerName: this.playerName, settings: this.settings }, (st) => this.status(st));
     } catch (err) {
       console.error(err);
       const s = this.show(`
@@ -357,10 +359,12 @@ export class App {
         <button class="btn primary" data-a="resume">חזרה למשחק</button>
         ${invite}
         ${c.hosting ? `<button class="btn" data-a="mode">מצב משחק: ${c.creative ? 'יצירתי' : 'הישרדות'}</button>` : ''}
+        <button class="btn" data-a="settings">הגדרות</button>
         <button class="btn" data-a="quit">${server ? 'שמור וצא לתפריט' : 'התנתק'}</button>
         ${CONTROLS_HELP}
       </div>`);
     el(s, '[data-a=resume]').onclick = () => c.resume();
+    el(s, '[data-a=settings]').onclick = () => this.settingsMenu(() => this.session === session && this.pauseMenu(session));
     const open = s.querySelector<HTMLButtonElement>('[data-a=open]');
     if (open) {
       open.onclick = async () => {
@@ -401,6 +405,39 @@ export class App {
       };
     }
     el(s, '[data-a=quit]').onclick = () => void this.exitToMenu();
+  }
+
+  private settingsMenu(back: () => void): void {
+    const st = this.settings;
+    const rows: Array<[keyof Settings, string, number, number, number, (v: number) => string]> = [
+      ['viewDistance', 'מרחק ראייה (צ׳אנקים)', 2, 12, 1, (v) => String(v)],
+      ['fov', 'שדה ראייה (FOV)', 50, 110, 1, (v) => `${v}°`],
+      ['sensitivity', 'רגישות עכבר', 0.2, 3, 0.1, (v) => v.toFixed(1)],
+      ['sound', 'עוצמת צלילים', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`],
+      ['music', 'עוצמת מוזיקה', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`],
+    ];
+    const s = this.show(`
+      <div class="panel">
+        <h2>הגדרות</h2>
+        ${rows.map(([k, label, min, max, step, fmt]) => `
+          <div class="settings-row">
+            <span>${label}</span>
+            <input type="range" data-k="${k}" min="${min}" max="${max}" step="${step}" value="${st[k]}" dir="ltr">
+            <span data-v="${k}">${fmt(st[k])}</span>
+          </div>`).join('')}
+        <p class="small">מרחק ראייה גדול יותר דורש מחשב חזק יותר. ההגדרות נשמרות בדפדפן הזה.</p>
+        <button class="btn primary" data-a="back">חזרה</button>
+      </div>`, { menu: !this.session });
+    for (const [k, , , , , fmt] of rows) {
+      const input = el<HTMLInputElement>(s, `[data-k=${k}]`);
+      input.oninput = () => {
+        this.settings = { ...this.settings, [k]: Number(input.value) };
+        el(s, `[data-v=${k}]`).textContent = fmt(Number(input.value));
+        saveSettings(this.settings);
+        this.session?.client.applySettings(this.settings);
+      };
+    }
+    el(s, '[data-a=back]').onclick = back;
   }
 
   private async exitToMenu(): Promise<void> {

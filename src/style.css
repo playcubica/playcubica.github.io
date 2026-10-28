@@ -621,3 +621,66 @@ body {
 .messages div.system {
   color: #ffe08a;
 }
+
+/* --- Stage 6 ------------------------------------------------------------- */
+
+.slot.runed img {
+  filter: drop-shadow(0 0 3px #b98cff) drop-shadow(0 0 2px #7fe3ff);
+  animation: rune-shimmer 2.4s ease-in-out infinite;
+}
+
+@keyframes rune-shimmer {
+  50% {
+    filter: drop-shadow(0 0 5px #d6b8ff) drop-shadow(0 0 3px #a8f0ff);
+  }
+}
+
+.trade-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  direction: rtl;
+}
+
+.trade-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #9d9d9d;
+  padding: 4px 8px;
+  cursor: pointer;
+  border: 2px solid #555;
+}
+
+.trade-row:hover {
+  background: #b5b5b5;
+}
+
+.trade-row.disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.trade-row .slot {
+  width: 40px;
+  height: 40px;
+}
+
+.rift-overlay {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, rgba(160, 80, 255, 0.15), rgba(90, 20, 160, 0.55));
+  display: none;
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: 1fr 140px 40px;
+  align-items: center;
+  gap: 8px;
+  text-align: right;
+}
+
+.settings-row input[type='range'] {
+  width: 140px;
+}

@@ -4,6 +4,7 @@
 
 import type { InventoryState, Slot } from '../items/Inventory';
 import type { ItemStack } from '../items/registry';
+import type { Trade } from '../entities/trades';
 import type { WindowKind } from '../items/Window';
 
 export type Vec3 = [number, number, number];
@@ -34,6 +35,11 @@ export type ClientMsg =
   /** Q: drop one (or the whole stack) of the held item. */
   | { t: 'drop'; all: boolean }
   | { t: 'attack'; entityId: number }
+  /** Right-click on a creature (traders). */
+  | { t: 'interact'; entityId: number }
+  | { t: 'trade'; entityId: number; offer: number }
+  /** Client settings the host needs. */
+  | { t: 'settings'; viewDistance: number }
   /** Click in a window (see Window.ts); window 0 is the player's inventory. */
   | { t: 'inv'; window: number; action: number; slot: number; button: number; item?: number }
   | { t: 'closeWindow'; window: number }
@@ -98,6 +104,8 @@ export type ServerMsg =
   /** Creature movement, flat [id, x, y, z, yaw, anim, …] (10 Hz). */
   | { t: 'mobMove'; data: number[] }
   | { t: 'entityEvent'; id: number; event: 'hurt' | 'death' | 'spores' }
+  /** A trader's offers (after 'interact'). */
+  | { t: 'trades'; entityId: number; profession: number; offers: Trade[] }
   /** The host pushes this player (hit by a creature). */
   | { t: 'knockback'; vx: number; vy: number; vz: number }
   /** Other players' positions (10 Hz). */
@@ -122,6 +130,6 @@ export type ServerMsg =
 
 export type EntityInfo =
   | { id: number; kind: 'item'; x: number; y: number; z: number; item: ItemStack }
-  | { id: number; kind: 'mob'; mob: number; x: number; y: number; z: number; yaw: number }
+  | { id: number; kind: 'mob'; mob: number; x: number; y: number; z: number; yaw: number; variant?: number }
   /** A flying thorn; clients extrapolate it from its launch velocity. */
   | { id: number; kind: 'projectile'; x: number; y: number; z: number; vx: number; vy: number; vz: number };

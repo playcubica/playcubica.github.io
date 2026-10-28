@@ -133,6 +133,48 @@ must touch something, it can't overlap a player, plants need solid ground, creat
 Stage 4 added: movement speed limit, chat rate-limit, name checks, timeouts. Fall damage still derives
 from client-reported positions (bounded by the speed check).
 
+### Extensions (stage 6)
+- **Block texture variants**: `BlockDef.texFn(state, dir)` + `extraTex` (crop stages, wire on/off,
+  pusher front by direction, farmland wet/dry, gates on/off). Cross-shaped plants use `faceLayer` too.
+- **Farming**: shovel + right-click on grass/dirt → farmland (wet with water within 4 blocks, dries back
+  to dirt without a crop). Seeds (12% from tall grass, also from harvests) → Sunwheat, 8 stages via random
+  ticks (faster when wet). Spore powder = fertiliser (+2–4 stages). 3 sunwheat → bread; 1 → 2 seeds.
+- **Glow power** (`server/power.ts`, host only): glowwire = item "lumen dust" (lumen crystals now drop 2–4;
+  4 dust → crystal). Strength 15, −1 per wire block (same level, 4 directions). Sources: lever, pressure
+  plate (players/creatures standing on it), power crystal. Relay (back → front, 2-tick delay, restores 15),
+  inverter (front on while back off; 2 ticks). Consumers: glow lamp (LAMP ↔ LAMP_ON), pusher (pushes up to
+  12 blocks the way it faces, `state & 7` = mesher dir, bit 3 extended, head block in front; can't move
+  corerock, rifts, doors, containers), doors (follow the signal only when the signal changes, so a door
+  opened by hand stays open). Any `setBlockAndBroadcast` next to a power block triggers
+  `PowerGrid.update`; gate ticks are scheduled in `GameServer.scheduled`.
+- **Runes** (`shared/items/runes.ts`): rune table window (tool + rune + lumen dust → upgraded tool, cost
+  4 × level, max level 3). Swiftness (+30% mining speed/level), keenness (+1 damage/level, swords/axes),
+  endurance (wear chance 1/(level+1)), bounty (ores & crops +0..level extra). Stored as
+  `ItemStack.runes = [swift, keen, endure, bounty]`. Rune stones: shapeless cut stone + ember shard + lumen
+  dust + gold ingot / iron ingot / diamond / spore powder.
+- **Ember Deep** (`shared/world/dimensions.ts`): same coordinate space, x ≥ 500,000 (origin 1,000,000).
+  Corerock floor (y 0) and ceiling (y 127), ashstone caverns (3D noise), magma lakes at y ≤ 24 (burns
+  3 every 0.5 s, you swim slowly), emberstone (light 10), ember ore (stone pickaxe+ → ember shards),
+  lumen crystals on ceilings. Client: red fog, no sky, min light 0.16, "deep" music mood. No sleeping.
+- **Rifts**: rift stone (crafted with a diamond and 4 lumen crystals) + a lumen crystal on each diagonal
+  corner + right-click with lumen dust → 2-high rift. Standing in it for 2 s moves you to x ± 1,000,000
+  (1:1); the host loads the destination (`ServerWorld.ensureChunk`), reuses a rift within 6 blocks or
+  builds a lit return altar, then teleports.
+- **Settlements** (`server/worldgen/settlements.ts`): one possible per 192×192 cell (50%) in plains/forest/
+  desert/snow; 3–5 houses (style by biome) with door, windows, bedroll, workbench, torch and a loot chest,
+  a well, a 5×5 field and gravel paths. Pure functions of the seed; each chunk builds its own part in the
+  worker (loot chests travel back as `GenResult.blockEntities`). Traders (farmer / smith / mystic,
+  `shared/entities/trades.ts`) spawn when the centre chunk loads, stay within 10 blocks of home, never
+  distance-despawn; right-click → `trades`, click an offer → `trade` (host checks items). Currency:
+  lumen dust.
+- **Sound & music** (`client/audio/AudioEngine.ts`): everything synthesized (noise bursts by material,
+  oscillator sweeps), positional (distance gain + stereo pan). Own actions sound immediately; the host's
+  echo of them is skipped (`predicted` map). Generative pentatonic pieces every few minutes; mood = day /
+  night / deep. Audio unlocks on the "resume" click.
+- **Settings** (`client/settings.ts`, localStorage `cubica.settings`): view distance 2–12 (per player on
+  the host via `settings` message), FOV, mouse sensitivity, sound and music volume. From the main menu and
+  the pause menu; applied live.
+
 ### Creatures (stage 5)
 - Original creatures (`shared/entities/mobs.ts`), not 1:1 equivalents of another game's mobs:
   - Passive: Grazer צמרן (fleece + meat), Tuskling חטון (meat), Stiltfowl רגלון (meat), Hornox קרנוף
@@ -254,7 +296,7 @@ before the user has approved the current one.**
    players, clear error messages when a connection fails (including symmetric NAT without TURN).
 5. ✅ **Creatures**: original passive and hostile creatures (no creeper equivalent), light-based spawning,
    A*, combat with knockback.
-6. ⏳ **Extensions**: our own signal/power system, an original dimension with its own portal ritual, rune
+6. ✅ **Extensions**: our own signal/power system, an original dimension with its own portal ritual, rune
    upgrades, farming, settlements with traders, Web Audio sounds and music, settings screen (view distance,
    FOV, sensitivity).
 7. ⏳ **Publishing**: GitHub Actions → GitHub Pages on every push, with a permanent link.

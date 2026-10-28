@@ -33,7 +33,23 @@ const eyes = (x: number, y: number, z: number, color: RGB = [0.05, 0.05, 0.05], 
   { size: [w, h, 0.3], at: [x, y, z], color, glow },
 ];
 
+/** Placeholder colour replaced by the trader's profession colour. */
+const ROBE: RGB = [-1, -1, -1];
+const ROBE_COLORS: RGB[] = [[0.35, 0.55, 0.25], [0.45, 0.33, 0.24], [0.42, 0.26, 0.6]];
+
 const MODELS: Record<number, Part[]> = {
+  [Mob.TRADER]: [
+    { size: [8, 20, 6], at: [0, 10, 0], color: ROBE },
+    { size: [3, 11, 3], at: [-5.5, 15.5, 0], color: ROBE },
+    { size: [3, 11, 3], at: [5.5, 15.5, 0], color: ROBE },
+    { size: [2, 2, 2], at: [-5.5, 9, 0], color: [0.85, 0.68, 0.52] },
+    { size: [2, 2, 2], at: [5.5, 9, 0], color: [0.85, 0.68, 0.52] },
+    { size: [8, 8, 8], at: [0, 24, 0], color: [0.85, 0.68, 0.52] },
+    ...eyes(1.8, 25, -4.1),
+    { size: [2, 3, 1], at: [0, 23, -4.4], color: [0.75, 0.56, 0.42] },
+    { size: [11, 1, 11], at: [0, 28.5, 0], color: [0.3, 0.22, 0.14] },
+    { size: [7, 3, 7], at: [0, 30.5, 0], color: [0.3, 0.22, 0.14] },
+  ],
   [Mob.GRAZER]: [
     { size: [12, 10, 16], at: [0, 11, 0], color: [0.92, 0.89, 0.8] },
     { size: [6, 6, 6], at: [0, 14, -10], color: [0.36, 0.26, 0.2], top: [0.92, 0.89, 0.8] },
@@ -198,7 +214,8 @@ export class MobRenderer {
       kind: e.mob, root, model, parts: [], material, x: e.x, y: e.y, z: e.z, yaw: e.yaw,
       tx: e.x, ty: e.y, tz: e.z, tyaw: e.yaw, anim: 0, walk: Math.random() * 6, hurt: 0, dying: 0,
     };
-    for (const p of parts) {
+    for (const part of parts) {
+      const p = part.color === ROBE ? { ...part, color: ROBE_COLORS[e.variant ?? 0] ?? ROBE_COLORS[0] } : part;
       const mesh = new THREE.Mesh(box(p), p.glow ? this.glowMaterial : material);
       if (p.role === 'legA' || p.role === 'legB' || p.role === 'arm') {
         // Swing from the top of the limb.
@@ -273,6 +290,24 @@ export class MobRenderer {
 
   removeInChunk(cx: number, cz: number): void {
     for (const [id, m] of this.mobs) if (Math.floor(m.x) >> 4 === cx && Math.floor(m.z) >> 4 === cz) this.remove(id);
+  }
+
+  position(id: number): { x: number; y: number; z: number } | null {
+    const m = this.mobs.get(id);
+    return m ? { x: m.x, y: m.y, z: m.z } : null;
+  }
+
+  isHostile(id: number): boolean {
+    const m = this.mobs.get(id);
+    return !!m && !!mobDef(m.kind)?.hostile;
+  }
+
+  /** A random living creature within r (for ambient sounds). */
+  randomNear(x: number, y: number, z: number, r: number): { x: number; y: number; z: number; hostile: boolean } | null {
+    const list = [...this.mobs.values()].filter((m) => m.dying === 0 && Math.hypot(m.x - x, m.y - y, m.z - z) < r);
+    if (list.length === 0) return null;
+    const m = list[Math.floor(Math.random() * list.length)];
+    return { x: m.x, y: m.y, z: m.z, hostile: !!mobDef(m.kind)?.hostile };
   }
 
   /** Nearest living creature hit by the ray within maxDist. */

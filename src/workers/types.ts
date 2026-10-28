@@ -1,3 +1,5 @@
+import type { BlockEntity } from '../shared/world/blockEntities';
+
 export interface GenRequest {
   seed: number;
   cx: number;
@@ -12,6 +14,7 @@ export interface GenResult {
   heightmap: Uint8Array;
   biomes: Uint8Array;
   maxY: number;
+  blockEntities: Array<[number, BlockEntity]>;
 }
 
 export interface MeshRequest {

@@ -4,10 +4,11 @@ import { itemIcon } from './icons';
 
 /** Fills a slot element with an item icon, count and durability bar. */
 export function renderSlot(el: HTMLElement, s: Slot): void {
-  const key = s ? `${s.id}:${s.count}:${s.dmg ?? 0}` : '';
+  const key = s ? `${s.id}:${s.count}:${s.dmg ?? 0}:${s.runes?.join('') ?? ''}` : '';
   if (el.dataset.key === key) return;
   el.dataset.key = key;
   el.replaceChildren();
+  el.classList.toggle('runed', !!s?.runes);
   if (!s) return;
   const img = document.createElement('img');
   img.src = itemIcon(s.id);
@@ -191,6 +192,17 @@ export class Hud {
   setEating(progress: number | null): void {
     this.eatBar.style.display = progress === null ? 'none' : '';
     if (progress !== null) (this.eatBar.firstChild as HTMLDivElement).style.width = `${progress * 100}%`;
+  }
+
+  private riftEl: HTMLDivElement | null = null;
+
+  setRift(on: boolean): void {
+    if (!this.riftEl) {
+      this.riftEl = document.createElement('div');
+      this.riftEl.className = 'rift-overlay';
+      this.root.prepend(this.riftEl);
+    }
+    this.riftEl.style.display = on ? 'block' : 'none';
   }
 
   flashHurt(): void {

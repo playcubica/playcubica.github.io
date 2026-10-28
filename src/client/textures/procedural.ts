@@ -433,6 +433,140 @@ const PAINTERS: Record<string, (p: Pixmap, r: Rand) => void> = {
       for (let x = 7 - w; x <= 8 + w; x++) if (r() < 0.8) p.set(x, y, shade([44, 98, 76], 0.85 + r() * 0.3));
     }
   },
+  farmland_dry(p, r) {
+    dirt(p, r);
+    for (let y = 1; y < TEX_SIZE; y += 4) for (let x = 0; x < TEX_SIZE; x++) p.set(x, y, shade(DIRT, 0.62));
+  },
+  farmland_wet(p, r) {
+    speckle(p, r, [86, 58, 40], 0.08);
+    for (let y = 1; y < TEX_SIZE; y += 4) for (let x = 0; x < TEX_SIZE; x++) p.set(x, y, [58, 38, 26]);
+  },
+  ...Object.fromEntries(Array.from({ length: 8 }, (_, stage) => [`sunwheat_${stage}`, (p: Pixmap, r: Rand) => {
+    plantBase(p);
+    const top = 14 - Math.floor(stage * 1.5);
+    const ripe = stage >= 7;
+    for (const x of [2, 5, 8, 11, 13]) {
+      for (let y = top + (x % 3); y < TEX_SIZE; y++) p.set(x, y, ripe ? [196, 168, 70] : shade([90, 150, 60], 0.85 + r() * 0.2));
+      if (stage >= 5) {
+        const head: RGB = ripe ? [236, 196, 70] : [170, 180, 80];
+        for (let k = 0; k < 3; k++) p.set(x + (k % 2), top + (x % 3) - k, head);
+      }
+    }
+  }])),
+  glowwire_off(p) {
+    plantBase(p);
+    for (let t = 0; t < TEX_SIZE; t++) {
+      p.set(t, 7, [110, 70, 40]); p.set(t, 8, [90, 56, 30]);
+      p.set(7, t, [110, 70, 40]); p.set(8, t, [90, 56, 30]);
+    }
+  },
+  glowwire_on(p) {
+    plantBase(p);
+    for (let t = 0; t < TEX_SIZE; t++) {
+      p.set(t, 7, [255, 214, 110]); p.set(t, 8, [240, 170, 60]);
+      p.set(7, t, [255, 214, 110]); p.set(8, t, [240, 170, 60]);
+    }
+  },
+  lever(p, r) {
+    brickStone(p, r, [120, 118, 114]);
+    for (let y = 0; y < TEX_SIZE; y++) for (let x = 6; x <= 9; x++) p.set(x, y, shade([140, 100, 60], 0.9 + r() * 0.15));
+  },
+  pressure_plate: (p, r) => speckle(p, r, [142, 144, 148], 0.04),
+  power_crystal(p, r) {
+    speckle(p, r, [170, 40, 40], 0.08);
+    for (let n = 0; n < 7; n++) {
+      const cx = 1 + Math.floor(r() * 13);
+      const cy = 1 + Math.floor(r() * 13);
+      p.set(cx, cy, [255, 200, 120]);
+      p.set(cx + 1, cy, [255, 120, 80]);
+      p.set(cx, cy + 1, [255, 120, 80]);
+    }
+  },
+  gate_off(p, r) {
+    speckle(p, r, [150, 150, 154], 0.04);
+    for (let t = 2; t < 14; t++) p.set(t, 8, [100, 70, 50]);
+  },
+  gate_on(p, r) {
+    speckle(p, r, [150, 150, 154], 0.04);
+    for (let t = 2; t < 14; t++) p.set(t, 8, [255, 200, 90]);
+    for (let t = 6; t < 10; t++) for (let u = 6; u < 10; u++) p.set(t, u, [255, 230, 150]);
+  },
+  lamp_off(p, r) {
+    speckle(p, r, [96, 82, 60], 0.06);
+    for (let t = 0; t < TEX_SIZE; t++) { p.set(t, 0, [60, 50, 40]); p.set(t, 15, [60, 50, 40]); p.set(0, t, [60, 50, 40]); p.set(15, t, [60, 50, 40]); }
+    for (let t = 3; t < 13; t++) { p.set(t, 7, [70, 60, 46]); p.set(7, t, [70, 60, 46]); }
+  },
+  lamp_on(p, r) {
+    speckle(p, r, [255, 222, 140], 0.06);
+    for (let t = 0; t < TEX_SIZE; t++) { p.set(t, 0, [190, 130, 60]); p.set(t, 15, [190, 130, 60]); p.set(0, t, [190, 130, 60]); p.set(15, t, [190, 130, 60]); }
+    for (let t = 3; t < 13; t++) { p.set(t, 7, [255, 250, 210]); p.set(7, t, [255, 250, 210]); }
+  },
+  pusher_side(p, r) {
+    brickStone(p, r, [116, 114, 110]);
+    for (let y = 0; y < 4; y++) for (let x = 0; x < TEX_SIZE; x++) p.set(x, y, shade([170, 136, 92], 0.9 + r() * 0.15));
+  },
+  pusher_back: (p, r) => brickStone(p, r, [100, 98, 96]),
+  pusher_front(p, r) {
+    planks([176, 140, 92])(p, r);
+    for (let t = 6; t < 10; t++) for (let u = 6; u < 10; u++) p.set(t, u, [200, 200, 206]);
+  },
+  pusher_front_open(p, r) {
+    brickStone(p, r, [70, 68, 66]);
+    for (let t = 6; t < 10; t++) for (let u = 6; u < 10; u++) p.set(t, u, [200, 200, 206]);
+  },
+  rift_stone(p, r) {
+    speckle(p, r, [46, 36, 64], 0.1);
+    blobs(p, r, [110, 70, 170], 5, 3, 0.1);
+  },
+  rift_stone_top(p, r) {
+    speckle(p, r, [46, 36, 64], 0.1);
+    for (let t = 0; t < 12; t++) {
+      const a = (t / 12) * Math.PI * 2;
+      p.set(Math.round(7.5 + Math.cos(a) * 5), Math.round(7.5 + Math.sin(a) * 5), [190, 140, 255]);
+    }
+  },
+  rift(p, r) {
+    for (let y = 0; y < TEX_SIZE; y++) for (let x = 0; x < TEX_SIZE; x++) {
+      const v = Math.sin(x * 0.9 + y * 0.6) + Math.sin(y * 1.3 - x * 0.4) + r() * 0.6;
+      p.set(x, y, v > 0.8 ? [210, 160, 255] : v > -0.4 ? [130, 60, 210] : [70, 20, 140], 190);
+    }
+  },
+  ashstone(p, r) {
+    speckle(p, r, [74, 66, 66], 0.09);
+    blobs(p, r, [52, 46, 48], 7, 4, 0.06);
+    blobs(p, r, [96, 86, 84], 4, 2, 0.05);
+  },
+  emberstone(p, r) {
+    speckle(p, r, [92, 48, 32], 0.08);
+    blobs(p, r, [240, 140, 50], 6, 3, 0.12);
+    blobs(p, r, [255, 210, 120], 3, 1, 0.05);
+  },
+  ember_ore(p, r) {
+    PAINTERS.ashstone(p, r);
+    for (let n = 0; n < 5; n++) {
+      const cx = 2 + Math.floor(r() * 12);
+      const cy = 2 + Math.floor(r() * 12);
+      p.set(cx, cy, [255, 120, 40]); p.set(cx + 1, cy, [255, 180, 70]); p.set(cx, cy + 1, [200, 70, 20]);
+    }
+  },
+  magma(p, r) {
+    for (let y = 0; y < TEX_SIZE; y++) for (let x = 0; x < TEX_SIZE; x++) {
+      const v = Math.sin(x * 0.7 + r()) + Math.cos(y * 0.8);
+      p.set(x, y, v > 1 ? [255, 220, 120] : v > 0 ? [255, 140, 40] : [200, 60, 20], 235);
+    }
+  },
+  rune_table_top(p, r) {
+    speckle(p, r, [60, 52, 80], 0.06);
+    for (let t = 0; t < 16; t++) {
+      const a = (t / 16) * Math.PI * 2;
+      p.set(Math.round(7.5 + Math.cos(a) * 6), Math.round(7.5 + Math.sin(a) * 6), [170, 130, 255]);
+    }
+    for (let t = 5; t < 11; t++) { p.set(t, 7, [130, 220, 255]); p.set(7, t, [130, 220, 255]); }
+  },
+  rune_table_side(p, r) {
+    brickStone(p, r, [124, 122, 130]);
+    for (let x = 0; x < TEX_SIZE; x++) { p.set(x, 0, [80, 60, 120]); p.set(x, 1, [110, 80, 170]); }
+  },
   cut_stone(p, r) {
     speckle(p, r, [132, 134, 138], 0.04);
     for (let t = 0; t < TEX_SIZE; t++) {

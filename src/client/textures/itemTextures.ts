@@ -209,6 +209,68 @@ const PAINTERS: Record<number, () => Pixmap> = {
     const p = lump([110, 200, 170], [200, 255, 235], 41);
     return p;
   },
+  [I.SEEDS]: () => {
+    const p = blank();
+    const r = mulberry32(51);
+    for (let n = 0; n < 9; n++) {
+      const x = 3 + Math.floor(r() * 10);
+      const y = 4 + Math.floor(r() * 9);
+      p.set(x, y, [190, 160, 80]);
+      p.set(x, y + 1, [140, 110, 50]);
+    }
+    return p;
+  },
+  [I.SUNWHEAT]: () => {
+    const p = blank();
+    for (let k = 0; k < 3; k++) {
+      for (let y = 4; y < 15; y++) p.set(5 + k * 3 - Math.floor((15 - y) / 6), y, [196, 168, 70]);
+      for (let y = 2; y < 7; y++) { p.set(5 + k * 3 - 1, y, [240, 200, 80]); p.set(5 + k * 3, y, [220, 180, 60]); }
+    }
+    return p;
+  },
+  [I.BREAD]: () => {
+    const p = blank();
+    for (let y = 6; y < 13; y++) for (let x = 2; x < 14; x++) {
+      const d = Math.hypot((x - 7.5) / 6, (y - 9.5) / 3.6);
+      if (d <= 1) p.set(x, y, d > 0.75 ? [150, 92, 40] : y < 9 ? [214, 150, 70] : [196, 130, 60]);
+    }
+    for (const x of [5, 8, 11]) p.set(x, 7, [240, 200, 140]);
+    return p;
+  },
+  [I.LUMEN_DUST]: () => {
+    const p = blank();
+    const r = mulberry32(61);
+    for (let n = 0; n < 40; n++) {
+      const a = r() * Math.PI * 2;
+      const d = r() * 5;
+      p.set(Math.round(8 + Math.cos(a) * d), Math.round(10 + Math.sin(a) * d * 0.6), r() < 0.3 ? [255, 250, 200] : [240, 196, 90]);
+    }
+    return p;
+  },
+  [I.EMBER_SHARD]: () => {
+    const p = blank();
+    for (let y = 2; y < 15; y++) {
+      const w = y < 8 ? (y - 2) / 2 : (15 - y) / 2.4;
+      for (let x = Math.round(8 - w); x <= Math.round(8 + w); x++) p.set(x, y, x < 8 ? [255, 170, 70] : [210, 80, 30]);
+    }
+    return p;
+  },
+  ...Object.fromEntries([I.RUNE_SWIFT, I.RUNE_KEEN, I.RUNE_ENDURE, I.RUNE_BOUNTY].map((id, k) => [id, () => {
+    const p = blank();
+    const glow: RGB = ([[255, 220, 90], [150, 210, 255], [140, 255, 200], [220, 140, 255]] as RGB[])[k];
+    for (let y = 2; y < 14; y++) for (let x = 3; x < 13; x++) {
+      const edge = x === 3 || x === 12 || y === 2 || y === 13;
+      p.set(x, y, edge ? [70, 70, 78] : [118, 118, 126]);
+    }
+    const glyphs = [
+      [[5, 4], [6, 5], [7, 6], [8, 7], [9, 8], [10, 9], [7, 9], [8, 10]],
+      [[7, 4], [7, 5], [7, 6], [7, 7], [7, 8], [7, 9], [5, 6], [9, 6]],
+      [[5, 5], [6, 5], [7, 5], [8, 5], [9, 5], [5, 9], [9, 9], [7, 7], [6, 8], [8, 8]],
+      [[7, 4], [6, 5], [8, 5], [5, 6], [9, 6], [6, 8], [8, 8], [7, 9], [7, 10]],
+    ][k];
+    for (const [x, y] of glyphs) p.set(x, y, glow);
+    return p;
+  }])),
   [B.ASHWOOD_DOOR]: () => {
     const p = blank();
     for (let y = 1; y < 15; y++) for (let x = 4; x < 12; x++) {

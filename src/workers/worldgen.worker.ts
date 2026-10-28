@@ -10,7 +10,7 @@ serveWorker<GenRequest, GenResult>((req) => {
   const c = gen.generate(req.cx, req.cz);
   computeChunkLight(c);
   return {
-    res: { cx: c.cx, cz: c.cz, blocks: c.blocks, light: c.light, heightmap: c.heightmap, biomes: c.biomes, maxY: c.maxY },
+    res: { cx: c.cx, cz: c.cz, blocks: c.blocks, light: c.light, heightmap: c.heightmap, biomes: c.biomes, maxY: c.maxY, blockEntities: [...c.blockEntities] },
     transfer: [c.blocks.buffer, c.light.buffer, c.heightmap.buffer, c.biomes.buffer],
   };
 });

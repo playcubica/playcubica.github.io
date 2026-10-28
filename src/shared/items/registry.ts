@@ -34,6 +34,8 @@ export interface ItemStack {
   count: number;
   /** Damage taken (tools). */
   dmg?: number;
+  /** Rune levels [swiftness, keenness, endurance, bounty] (tools, from the rune table). */
+  runes?: number[];
 }
 
 export const I = {
@@ -54,7 +56,21 @@ export const I = {
   SILK: 4110,
   GLOOM_ASH: 4111,
   SPORE_POWDER: 4112,
+  SEEDS: 4113,
+  SUNWHEAT: 4114,
+  BREAD: 4115,
+  LUMEN_DUST: 4116,
+  EMBER_SHARD: 4117,
+  RUNE_SWIFT: 4118,
+  RUNE_KEEN: 4119,
+  RUNE_ENDURE: 4120,
+  RUNE_BOUNTY: 4121,
 } as const;
+
+/** Rune item ids in the order of ItemStack.runes. */
+export const RUNE_ITEMS = [I.RUNE_SWIFT, I.RUNE_KEEN, I.RUNE_ENDURE, I.RUNE_BOUNTY];
+export const RUNE_NAMES = ['מהירות', 'חדות', 'עמידות', 'שפע'];
+export const MAX_RUNE_LEVEL = 3;
 
 export const TIERS = ['wood', 'stone', 'iron', 'gold', 'diamond'] as const;
 export type Tier = (typeof TIERS)[number];
@@ -88,6 +104,9 @@ const HEBREW: Record<string, string> = {
   gold_ore: 'עפרת זהב', diamond_ore: 'עפרת יהלום', lumen_crystal: 'גביש לומן', tall_grass: 'עשב גבוה',
   sunbloom: 'פרח שמש', bluebell: 'פעמונית', dry_scrub: 'שיח יבש', ashwood_planks: 'קרשי עץ אפר',
   frostpine_planks: 'קרשי אורן כפור', rubblestone: 'אבן גוויל', glass: 'זכוכית', cut_stone: 'אבן מסותתת',
+  lever: 'ידית', pressure_plate: 'לוחית לחץ', power_crystal: 'גביש כוח', relay: 'ממסר', inverter: 'מהפך',
+  lamp: 'מנורת זוהר', pusher: 'דוחף', rift_stone: 'אבן בקע', ashstone: 'אבן אפר', emberstone: 'אבן גחלים',
+  ember_ore: 'עפרת גחלת', rune_table: 'שולחן רונות',
   workbench: 'שולחן מלאכה', furnace: 'כבשן', furnace_lit: 'כבשן בוער', chest: 'תיבה', bedroll: 'שק שינה',
   torch: 'לפיד', ashwood_door: 'דלת עץ', ashwood_sapling: 'שתיל עץ אפר', frostpine_sapling: 'שתיל אורן כפור',
 };
@@ -98,11 +117,15 @@ const FUEL: Partial<Record<number, number>> = {
   [B.DRY_SCRUB]: 100,
 };
 
+const NOT_ITEMS = new Set<number>([B.AIR, B.FURNACE_LIT, B.FARMLAND, B.SUNWHEAT, B.GLOWWIRE, B.LAMP_ON, B.PUSHER_HEAD, B.RIFT, B.MAGMA]);
+const FLAT_BLOCKS = new Set<number>([B.TORCH, B.ASHWOOD_DOOR, B.LEVER, B.PRESSURE_PLATE, B.RELAY, B.INVERTER]);
+
 const items: ItemDef[] = [];
 
 for (const b of BLOCKS) {
-  if (!b || b.id === B.AIR || b.id === B.FURNACE_LIT) continue;
-  const flat = RENDER[b.id] === 2 || b.id === B.TORCH || b.id === B.ASHWOOD_DOOR;
+  // Blocks that only exist in the world (their item is something else, or nothing).
+  if (!b || NOT_ITEMS.has(b.id)) continue;
+  const flat = RENDER[b.id] === 2 || FLAT_BLOCKS.has(b.id);
   items[b.id] = {
     id: b.id, key: b.key, name: HEBREW[b.key] ?? b.name, maxStack: b.id === B.ASHWOOD_DOOR ? 16 : 64,
     block: b.id, fuel: FUEL[b.id], flat,
@@ -129,7 +152,13 @@ item(I.FLEECE, 'fleece', 'צמר');
 item(I.HIDE, 'hide', 'עור');
 item(I.SILK, 'silk', 'חוט משי');
 item(I.GLOOM_ASH, 'gloom_ash', 'אפר אפלה', { fuel: 800 });
-item(I.SPORE_POWDER, 'spore_powder', 'אבקת נבגים');
+item(I.SPORE_POWDER, 'spore_powder', 'אבקת נבגים (דשן)');
+item(I.SEEDS, 'seeds', 'זרעי שיבולת שמש', { block: B.SUNWHEAT });
+item(I.SUNWHEAT, 'sunwheat', 'שיבולת שמש');
+item(I.BREAD, 'bread', 'לחם', { food: { hunger: 5, saturation: 6 } });
+item(I.LUMEN_DUST, 'lumen_dust', 'אבקת זוהר', { block: B.GLOWWIRE });
+item(I.EMBER_SHARD, 'ember_shard', 'רסיס גחלת');
+RUNE_ITEMS.forEach((id, i) => item(id, `rune_${i}`, `רונת ${RUNE_NAMES[i]}`, { maxStack: 16 }));
 
 TIERS.forEach((tier, t) => {
   const st = TIER_STATS[tier];
@@ -174,6 +203,8 @@ export const CREATIVE_ITEMS: number[] = [
   B.TALL_GRASS, B.SUNBLOOM, B.BLUEBELL, B.DRY_SCRUB, B.ASHWOOD_SAPLING, B.FROSTPINE_SAPLING, B.WATER,
   I.STICK, I.COAL, I.RAW_IRON, I.RAW_GOLD, I.IRON_INGOT, I.GOLD_INGOT, I.DIAMOND,
   I.ASHFRUIT, I.BAKED_ASHFRUIT, I.FROSTBERRIES, I.RAW_MEAT, I.COOKED_MEAT,
-  I.FLEECE, I.HIDE, I.SILK, I.GLOOM_ASH, I.SPORE_POWDER,
+  I.FLEECE, I.HIDE, I.SILK, I.GLOOM_ASH, I.SPORE_POWDER, I.SEEDS, I.SUNWHEAT, I.BREAD,
+  I.LUMEN_DUST, B.LEVER, B.PRESSURE_PLATE, B.POWER_CRYSTAL, B.RELAY, B.INVERTER, B.LAMP, B.PUSHER,
+  B.RUNE_TABLE, B.RIFT_STONE, B.ASHSTONE, B.EMBERSTONE, B.EMBER_ORE, I.EMBER_SHARD, ...RUNE_ITEMS,
   ...TIERS.flatMap((_, t) => TOOL_KINDS.map((__, k) => toolId(t, k))),
 ].filter((id) => items[id]);

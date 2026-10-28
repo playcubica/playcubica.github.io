@@ -8,6 +8,8 @@ export interface ChunkUniforms {
   uFogColor: { value: THREE.Color };
   uFogNear: { value: number };
   uFogFar: { value: number };
+  /** Darkest a lit surface gets (raised in the Ember Deep). */
+  uMinLight: { value: number };
   [name: string]: THREE.IUniform;
 }
 
@@ -37,6 +39,7 @@ const fragmentShader = /* glsl */ `
   uniform float uFogNear;
   uniform float uFogFar;
   uniform float uAlphaTest;
+  uniform float uMinLight;
   in vec3 vUv;
   in float vShade;
   in vec3 vLight;
@@ -48,7 +51,7 @@ const fragmentShader = /* glsl */ `
     float sky = pow(0.8, 15.0 - vLight.x);
     float blk = pow(0.8, 15.0 - vLight.y);
     vec3 light = max(uSkyLight * sky, vec3(1.0, 0.86, 0.64) * blk);
-    light = max(light, vec3(0.06));
+    light = max(light, vec3(uMinLight));
     float ao = 0.5 + 0.5 * (vLight.z / 3.0);
     vec3 col = tex.rgb * light * vShade * ao;
     float f = smoothstep(uFogNear, uFogFar, vDist);
@@ -63,6 +66,7 @@ export function createChunkUniforms(tex: THREE.DataArrayTexture): ChunkUniforms 
     uFogColor: { value: new THREE.Color(0.7, 0.8, 0.95) },
     uFogNear: { value: 80 },
     uFogFar: { value: 120 },
+    uMinLight: { value: 0.06 },
   };
 }
 
