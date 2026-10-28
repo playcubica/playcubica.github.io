@@ -315,6 +315,26 @@ before the user has approved the current one.**
   `cubica-dist` preview config (`vite preview --base /cubica/`, port 4173).
 - Invite links use the page's own URL, so `?join=CODE` links point at the live site when the host plays there.
 
+### Accounts and cloud saves (after stage 7)
+- Optional Google sign-in via Firebase (project `playcubica`, config in `src/cloud/firebaseConfig.ts`;
+  the values are public). Firebase is loaded lazily (`import('firebase/...')`): on "sign in", or at startup
+  when localStorage `cubica.signedIn` says this browser was signed in. `null` config hides it all.
+- `src/cloud/account.ts` (`Account`: popup sign-in, sign-out, `idToken()`), `cloudWorlds.ts`
+  (`FirestoreWorlds` + `SyncedStore`), `verifyToken.ts` (RS256 JWT check with WebCrypto against Google's JWKs).
+- Cloud saves (Firestore, rules in `firestore.rules`, pasted in the Firebase console):
+  `users/{uid}/worlds/{id}` = `{ meta: JSON string, updatedAt }`, chunks in `.../chunks/{cx}_{cz}` = `{ d: Bytes }`.
+  IndexedDB stays the working copy. `SyncedStore` wraps the local ChunkStore: first push of a session uploads
+  every saved chunk, then only changed ones, at most once a minute (on `saveMeta`), on tab hide and on exit.
+  The load menu merges local and cloud lists; a newer (or cloud-only) copy is downloaded into IndexedDB
+  (`replaceWorld`) before playing. Same world on two devices at once: last writer wins per chunk.
+- Identity in multiplayer: `hello.token` = Firebase ID token; the host checks it (`ServerOptions.verifyAccount`)
+  and keys the player's save as `g:<uid>` (a guest save under the same name is taken over). A failed check
+  means "guest" with a chat note; the same account twice is kicked. Verified players get ✓ in the Tab list.
+  The host's own account is passed in-page (`addConnection({ host, account })`). Emails are never sent to
+  other players.
+- Free tier limits (Spark): Firestore 50k reads / 20k writes per day; a push is (changed chunks + 1) writes.
+- The built-in browser blocks the sign-in popup for automated clicks; real logins need the user.
+
 ### Stage 1 notes
 - Per-chunk performance (M-series, Node): generation ~1.6 ms, lighting ~1.2 ms, meshing ~4.7 ms. 60 FPS at
   view distance 8 (~300 chunks, ~100–200 draw calls).
