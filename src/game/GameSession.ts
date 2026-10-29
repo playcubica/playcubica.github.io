@@ -15,8 +15,10 @@ export interface SessionOptions {
   viewDistance: number;
   playerName: string;
   settings: Settings;
-  /** Signed-in Google account (Firebase uid), if any. */
+  /** This player's account (Firebase uid: automatic or Google), if any. */
   account?: string | null;
+  /** The account is a Google sign-in. */
+  google?: boolean;
   /** Remote only: ID token that proves `account` to the host. */
   token?: string | null;
   /** Host only: mirror the world to this cloud (signed-in players). */
@@ -64,7 +66,7 @@ export class GameSession {
       onAccountJoin: synced ? (uid, name) => synced.addMember(uid, name) : undefined,
     }, generator);
     const [serverEnd, clientEnd] = createLocalPair<ServerMsg, ClientMsg>();
-    server.addConnection(serverEnd, { host: true, account: opts.account });
+    server.addConnection(serverEnd, { host: true, account: opts.account, google: opts.google });
     const client = new GameClient(container, clientEnd, { name: opts.playerName, settings: opts.settings });
     client.onStatus = onStatus;
     server.start();

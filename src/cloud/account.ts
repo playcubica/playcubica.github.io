@@ -2,14 +2,19 @@ import type { FirebaseApp } from 'firebase/app';
 import type { Auth, User } from 'firebase/auth';
 import { firebaseConfig } from './firebaseConfig';
 
-// Optional Google sign-in (Firebase Auth). The Firebase SDK is loaded lazily: only when the
-// player clicks "sign in", or on startup when this browser was signed in last time.
+// Accounts (Firebase Auth). Every browser gets a hidden (anonymous) account on its own, so worlds
+// are saved in the cloud and shared with friends without anyone signing up. Signing in with Google
+// is optional: it upgrades that same account (keeping its worlds) so they can be reached from any
+// computer. If anonymous accounts are switched off in Firebase, players stay guests until they sign
+// in with Google.
 
 export interface AccountUser {
   uid: string;
   email: string;
   name: string;
   photo: string | null;
+  /** The automatic per-browser account (not signed in with Google). */
+  anonymous: boolean;
 }
 
 export type AccountState =
@@ -26,14 +31,6 @@ function remember(on: boolean): void {
     else localStorage.removeItem(SIGNED_IN_KEY);
   } catch {
     // storage blocked: the session is just not restored eagerly
-  }
-}
-
-function wasSignedIn(): boolean {
-  try {
-    return localStorage.getItem(SIGNED_IN_KEY) === '1';
-  } catch {
-    return false;
   }
 }
 
@@ -61,9 +58,28 @@ export class Account {
     return this.state.kind === 'signed-in' ? this.state.user : null;
   }
 
-  /** Restores the previous session in the background if there was one. */
+  /** Signed in with Google (not just the automatic account). */
+  get google(): AccountUser | null {
+    const u = this.user;
+    return u && !u.anonymous ? u : null;
+  }
+
+  /** Restores the session, or creates this browser's automatic account, in the background. */
   restore(): void {
-    if (this.configured && wasSignedIn()) void this.loadAuth().catch(() => this.set({ kind: 'guest' }));
+    if (!this.configured) return;
+    void this.loadAuth()
+      .then((auth) => this.ensureAccount(auth))
+      .catch(() => this.set({ kind: 'guest' }));
+  }
+
+  private async ensureAccount(auth: Auth): Promise<void> {
+    if (auth.currentUser) return;
+    const { signInAnonymously } = await import('firebase/auth');
+    try {
+      await signInAnonymously(auth);
+    } catch (err) {
+      console.warn('automatic account unavailable (enable Anonymous sign-in in Firebase)', err);
+    }
   }
 
   private set(state: AccountState): void {
@@ -95,17 +111,36 @@ export class Account {
 
   private applyUser(u: User | null): void {
     remember(!!u);
-    this.set(u ? { kind: 'signed-in', user: { uid: u.uid, email: u.email ?? '', name: u.displayName ?? '', photo: u.photoURL } } : { kind: 'guest' });
+    // After linking, the Google profile is in providerData until the next sign-in.
+    const p = u?.providerData.find((d) => d.providerId === 'google.com');
+    this.set(u
+      ? { kind: 'signed-in', user: { uid: u.uid, email: u.email ?? p?.email ?? '', name: u.displayName ?? p?.displayName ?? '', photo: u.photoURL ?? p?.photoURL ?? null, anonymous: u.isAnonymous } }
+      : { kind: 'guest' });
   }
 
   /** Opens Google's sign-in popup. Throws a Hebrew message on failure. */
   async signIn(): Promise<void> {
     const auth = await this.loadAuth();
-    const { GoogleAuthProvider, signInWithPopup } = await import('firebase/auth');
+    const { GoogleAuthProvider, signInWithPopup, linkWithPopup, signInWithCredential } = await import('firebase/auth');
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     try {
-      await signInWithPopup(auth, provider);
+      const current = auth.currentUser;
+      if (current?.isAnonymous) {
+        // Upgrade the automatic account, so its worlds stay with this player.
+        try {
+          await linkWithPopup(current, provider);
+          await current.reload();
+          this.applyUser(auth.currentUser);
+        } catch (err) {
+          // That Google account already has its own account: switch to it.
+          const cred = (err as { code?: string }).code === 'auth/credential-already-in-use' ? GoogleAuthProvider.credentialFromError(err as never) : null;
+          if (!cred) throw err;
+          await signInWithCredential(auth, cred);
+        }
+      } else {
+        await signInWithPopup(auth, provider);
+      }
     } catch (err) {
       const code = (err as { code?: string }).code ?? '';
       this.applyUser(auth.currentUser);
@@ -117,10 +152,12 @@ export class Account {
     }
   }
 
+  /** Signs out of Google; the browser gets a fresh automatic account. */
   async signOut(): Promise<void> {
     const auth = await this.loadAuth();
     const { signOut } = await import('firebase/auth');
     await signOut(auth);
+    await this.ensureAccount(auth);
   }
 
   /** A fresh ID token for proving this account to a host (null for guests). */

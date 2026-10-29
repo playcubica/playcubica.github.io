@@ -23,6 +23,8 @@ export class PlayerSession {
   name = '';
   /** Verified Google account (Firebase uid), or null for a guest. */
   account: string | null = null;
+  /** The account is a Google sign-in (shown with ✓), not just a browser's automatic account. */
+  google = false;
   /** Waiting for the account token check before joining. */
   verifying = false;
   /** The connection is gone. */

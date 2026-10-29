@@ -324,6 +324,14 @@ before the user has approved the current one.**
 - Invite links use the page's own URL, so `?join=CODE` links point at the live site when the host plays there.
 
 ### Accounts and cloud saves (after stage 7)
+- **Every browser has an account**: on startup `Account.restore()` signs in anonymously (Firebase
+  "Anonymous" provider) unless a session exists, so every player is a cloud member without signing up and
+  every hosted world is a shared world. Google sign-in is optional: from an automatic account it uses
+  `linkWithPopup` (same uid, worlds kept); if that Google account already exists it switches to it. Signing
+  out of Google gives the browser a new automatic account. ✓ in the player list = Google only
+  (`PlayerSession.google`, from the token's email). If the Anonymous provider is off, players stay guests
+  and everything falls back to the Google-only behaviour below.
+- "Play" re-reads the world's lock from the cloud first: if a friend started it meanwhile, it joins them.
 - Optional Google sign-in via Firebase (project `playcubica`, config in `src/cloud/firebaseConfig.ts`;
   the values are public). Firebase is loaded lazily (`import('firebase/...')`): on "sign in", or at startup
   when localStorage `cubica.signedIn` says this browser was signed in. `null` config hides it all.

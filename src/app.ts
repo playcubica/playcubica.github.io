@@ -172,6 +172,13 @@ export class App {
             Google תבקש לאשר שיתוף של השם, המייל והתמונה — הם משמשים רק לזה. <a href="privacy.html" target="_blank" rel="noopener">פרטיות</a></p>`;
       case 'signed-in': {
         const u = st.user;
+        if (u.anonymous) {
+          return `
+          <p class="small cloud-tag">☁ העולמות שלך נשמרים בענן ומשותפים עם כל מי שמשחק בהם — כל אחד מהם יכול להיכנס אליהם מתי שירצה.</p>
+          <button class="btn google" data-a="signin">התחברות עם Google</button>
+          <p class="small">לא חובה: מאפשר להגיע לאותם עולמות גם ממחשב או מדפדפן אחר, ומסמן לחברים שזה באמת את/ה (✓).
+            <a href="privacy.html" target="_blank" rel="noopener">פרטיות</a></p>`;
+        }
         return `
           <div class="account">
             ${u.photo ? `<img src="${esc(u.photo)}" alt="" referrerpolicy="no-referrer">` : ''}
@@ -283,7 +290,11 @@ export class App {
       };
     }
     const signOut = s.querySelector<HTMLButtonElement>('[data-a=signout]');
-    if (signOut) signOut.onclick = () => void this.account.signOut();
+    if (signOut) {
+      signOut.onclick = () => {
+        if (confirm('להתנתק מ-Google? העולמות המשותפים שלך לא יופיעו בדפדפן הזה עד שתתחבר/י שוב.')) void this.account.signOut();
+      };
+    }
     this.onMainMenu = true;
   }
 
@@ -397,6 +408,15 @@ export class App {
         return;
       }
       el(row, '[data-a=play]').onclick = async () => {
+        // A friend may have started it since the list loaded: then join them instead of a second copy.
+        if (cloud && r.cloud) {
+          const fresh = await withTimeout((await cloud).listWorlds(), 8000).then((l) => l.find((w) => w.meta.id === meta.id) ?? null).catch(() => null);
+          if (fresh) {
+            r.cloud = fresh;
+            const host = hostedBy(r);
+            if (host && fresh.meta.inviteCode) return this.joinMenu(fresh.meta.inviteCode, true);
+          }
+        }
         const newer = r.cloud && (!r.local || r.cloud.updatedAt > meta.lastPlayed + 1000);
         if (!newer || !cloud) return this.play(meta, { autoOpen: shareWithOthers });
         if (!this.storage) return fail('הדפדפן לא מאפשר שמירה מקומית, אז אי אפשר להוריד את העולם מהענן.');
@@ -485,7 +505,7 @@ export class App {
         <p class="error" data-f="error" style="display:none"></p>
         <button class="btn primary" data-a="join">הצטרף</button>
         <button class="btn" data-a="back">חזרה</button>
-        ${this.account.configured && !this.account.user ? '<p class="small">💡 מחוברים עם Google? העולם יופיע גם אצלכם ב"טען עולם", ותוכלו להמשיך אותו גם כשהמארח לא מחובר.</p>' : ''}
+        ${this.account.user ? '<p class="small cloud-tag">☁ אחרי שתיכנסו, העולם יופיע גם אצלכם ב"טען עולם", ותוכלו להיכנס אליו מתי שתרצו.</p>' : ''}
         <p class="small">החיבור ישיר בין המחשבים (WebRTC). שרת תיווך ציבורי וחינמי רק מכיר ביניהם.</p>
       </div>`, { menu: true });
     const error = el(s, '[data-f=error]');
@@ -603,6 +623,7 @@ export class App {
         playerName: this.playerName,
         settings: this.settings,
         account: this.account.user?.uid ?? null,
+        google: !!this.account.google,
         cloud: this.storage ? cloud : null,
         cloudUpToDate: opts.upToDate,
       }, (st) => this.status(st));
@@ -700,8 +721,8 @@ export class App {
       <div class="panel">
         <h2>${esc(server ? server.meta.name : 'עולם של חבר')}</h2>
         ${session.cloudProblem ? `<p class="warn">${esc(session.cloudProblem)}</p>` : ''}
-        ${server && session.shared ? '<p class="small cloud-tag">☁ העולם נשמר בענן. חברים שנכנסים מחוברים עם Google יקבלו אותו לרשימה שלהם ויוכלו להמשיך אותו גם בלעדיך.</p>' : ''}
-        ${server && !session.shared && this.account.configured ? '<p class="small">💡 רוצים שהעולם יישמר וחברים יוכלו להמשיך אותו גם בלעדיך? התחברו עם Google בתפריט הראשי.</p>' : ''}
+        ${server && session.shared ? '<p class="small cloud-tag">☁ העולם נשמר בענן. כל מי שנכנס אליו מקבל אותו לרשימה שלו ויכול להמשיך אותו גם בלעדיך.</p>' : ''}
+        ${server && !session.shared && this.account.configured ? '<p class="warn">העולם נשמר כרגע רק במחשב הזה (אין חיבור לענן), אז חברים לא יוכלו להמשיך אותו בלעדיך.</p>' : ''}
         <button class="btn primary" data-a="resume">חזרה למשחק</button>
         ${invite}
         ${c.hosting ? `<button class="btn" data-a="mode">מצב משחק: ${c.creative ? 'יצירתי' : 'הישרדות'}</button>` : ''}

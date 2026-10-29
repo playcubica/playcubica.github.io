@@ -37,7 +37,7 @@ export interface ServerOptions {
   /** Persistence; omit for a throw-away world. */
   store?: ChunkStore;
   /** Checks a joining player's account token (Google sign-in); omit to treat everyone as a guest. */
-  verifyAccount?: (token: string) => Promise<{ uid: string } | null>;
+  verifyAccount?: (token: string) => Promise<{ uid: string; email?: string } | null>;
   /** A player with a verified account joined (the world gets shared with them). */
   onAccountJoin?: (uid: string, name: string) => void;
   /** The shared world's id and open invite code, when friends could carry it on without the host. */
@@ -260,9 +260,12 @@ export class GameServer {
   }
 
   /** `account` is the host's own signed-in account (its connection is in-page, so it is trusted). */
-  addConnection(transport: Transport<ServerMsg, ClientMsg>, opts: { host?: boolean; account?: string | null } = {}): void {
+  addConnection(transport: Transport<ServerMsg, ClientMsg>, opts: { host?: boolean; account?: string | null; google?: boolean } = {}): void {
     const session = new PlayerSession(this.nextPlayerId++, transport, !!opts.host);
-    if (opts.host) session.account = opts.account ?? null;
+    if (opts.host) {
+      session.account = opts.account ?? null;
+      session.google = !!opts.google;
+    }
     transport.onMessage = (msg) => {
       session.lastSeen = performance.now();
       try {
@@ -303,7 +306,7 @@ export class GameServer {
   }
 
   private sendPlayerList(): void {
-    const players = [...this.players.values()].filter((q) => q.joined).map((q) => ({ id: q.id, name: q.name, ping: Math.round(q.rtt), host: q.isHost, verified: !!q.account }));
+    const players = [...this.players.values()].filter((q) => q.joined).map((q) => ({ id: q.id, name: q.name, ping: Math.round(q.rtt), host: q.isHost, verified: q.google }));
     this.broadcast({ t: 'playerList', players });
     const next = this.options.succession?.();
     if (next) {
@@ -413,6 +416,7 @@ export class GameServer {
         p.verifying = false;
         if (p.closed) return;
         p.account = account?.uid ?? null;
+        p.google = !!account?.email;
         this.join(p, version, name);
         if (!account && p.joined) this.chat(p, 'לא הצלחנו לאמת את חשבון ה-Google שלך — את/ה משחק/ת כאורח/ת בעולם הזה.');
       });

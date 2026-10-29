@@ -242,6 +242,9 @@ describe('accounts on the host', () => {
     expect(meta.players['g:uid-noa']).toBeDefined();
     expect(meta.players.Noa).toBeUndefined();
     expect(shared).toEqual(['uid-noa:Noa']); // the world gets shared with her
+    // A browser's automatic account (no email) shares worlds too, but gets no ✓ (that's for Google).
+    const shown = [...noa.got].reverse().find((m) => m.t === 'playerList');
+    expect(shown && shown.t === 'playerList' && shown.players.find((p) => p.name === 'Noa')?.verified).toBe(false);
 
     const again = await join('Noa2', 'good:uid-noa');
     expect(again.got.some((m) => m.t === 'kick' && m.reason.includes('כבר מחובר'))).toBe(true);
