@@ -31,7 +31,7 @@ function shadedBox(w: number, h: number, d: number, top: number[], side: number[
   return g;
 }
 
-function nameTag(name: string): THREE.Sprite {
+export function nameTag(name: string): THREE.Sprite {
   const c = document.createElement('canvas');
   const g = c.getContext('2d')!;
   const font = 'bold 28px system-ui, sans-serif';
@@ -134,6 +134,12 @@ export class PlayerModels {
       name, root, body, head, armL, armR, legL, legR, tag, material,
       history: [], walk: 0, swing: 0, bodyYaw: 0, lastX: 0, lastZ: 0,
     });
+  }
+
+  /** Where another player is drawn now (null if unknown or hidden). */
+  position(id: number): THREE.Vector3 | null {
+    const r = this.remotes.get(id);
+    return r && r.root.visible ? r.root.position : null;
   }
 
   remove(id: number): void {

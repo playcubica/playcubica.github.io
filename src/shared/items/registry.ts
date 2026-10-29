@@ -78,6 +78,8 @@ export const I = {
   DUSK_MEMBRANE: 4132,
   RAW_FISH: 4133,
   COOKED_FISH: 4134,
+  LEAD: 4135,
+  NAME_TAG: 4136,
 } as const;
 
 /** Rune item ids in the order of ItemStack.runes. */
@@ -177,6 +179,8 @@ item(I.MATRIARCH_HEART, 'matriarch_heart', 'לב אם-הגחלים', { maxStack:
 item(I.DUSK_MEMBRANE, 'dusk_membrane', 'קרום דמדומים');
 item(I.RAW_FISH, 'raw_fish', 'דג נא', { food: { hunger: 2, saturation: 0.4 } });
 item(I.COOKED_FISH, 'cooked_fish', 'דג צלוי', { food: { hunger: 5, saturation: 6 } });
+item(I.LEAD, 'lead', 'רצועה', { maxStack: 16 });
+item(I.NAME_TAG, 'name_tag', 'תג שם', { maxStack: 16 });
 item(I.HIDE, 'hide', 'עור');
 item(I.SILK, 'silk', 'חוט משי');
 item(I.GLOOM_ASH, 'gloom_ash', 'אפר אפלה', { fuel: 800 });

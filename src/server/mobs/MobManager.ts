@@ -1,7 +1,7 @@
 import { B, OPAQUE } from '../../shared/blocks/registry';
 import {
-  animalsFor, BABY_SCALE, BREED_COOLDOWN, EMBER_DAMAGE, GROW_TICKS, LOVE_TICKS, Mob, MOB_ATTACK_TICKS, MOB_REACH, MobAnim, MobFlag,
-  mobDef, monstersFor, pickSpawnKind, SAVED_FLAGS, SPORE_DAMAGE, SPORE_FUSE_TICKS, SPORE_RADIUS, type MobDef, type SavedMob, type Zone,
+  ambientFor, animalsFor, BABY_SCALE, BREED_COOLDOWN, EMBER_DAMAGE, GROW_TICKS, LOVE_TICKS, Mob, MOB_ATTACK_TICKS, MOB_REACH, MobAnim, MobFlag,
+  mobDef, monstersFor, pickSpawnKind, sanitizeMobName, SAVED_FLAGS, SPORE_DAMAGE, SPORE_FUSE_TICKS, SPORE_RADIUS, type MobDef, type SavedMob, type Zone,
 } from '../../shared/entities/mobs';
 import { isDeep } from '../../shared/world/dimensions';
 import { I, type ItemStack } from '../../shared/items/registry';
@@ -40,6 +40,13 @@ const THORN_GRAVITY = 6;
 const EMBER_SPEED = 12;
 /** Water monsters: a cap of their own (per player), so lakes don't eat the night's quota. */
 const WATER_PER_PLAYER = 4;
+/** Wildlife caps per player: fish/octopuses, birds, bats. */
+const SWIMMERS_PER_PLAYER = 10;
+const BIRDS_PER_PLAYER = 8;
+const BATS_PER_PLAYER = 4;
+/** Leads: the animal walks after its holder beyond this, and the lead snaps beyond that. */
+const LEAD_SLACK = 3.5;
+const LEAD_BREAK = 12;
 /** Elite slam: radius and damage at the centre. */
 const SLAM_RADIUS = 4.5;
 /** Pets: walk after their owner beyond this, jump to them beyond that. */
@@ -141,6 +148,10 @@ export interface MobEntity {
   dry: number;
   /** Players already hit by the current dash. */
   dashHits: Set<number>;
+  /** The player holding its lead. */
+  leash: number | null;
+  /** Given with a name tag; named creatures never wander off. */
+  name: string | null;
 }
 
 interface Thorn {
@@ -159,7 +170,7 @@ interface Thorn {
 }
 
 export type MobEventKind = 'hurt' | 'death' | 'spores' | 'love' | 'tamed' | 'smoke' | 'baby' | 'shear' | 'ram'
-  | 'clang' | 'crit' | 'blink' | 'slam' | 'stun' | 'roar';
+  | 'clang' | 'crit' | 'blink' | 'slam' | 'stun' | 'roar' | 'ink';
 
 export interface MobEvents {
   spawned(info: EntityInfo): void;
@@ -198,7 +209,7 @@ export class MobManager {
   static info(m: MobEntity): EntityInfo {
     return {
       id: m.id, kind: 'mob', mob: m.def.kind, x: m.body.x, y: m.body.y, z: m.body.z, yaw: m.yaw, variant: m.variant,
-      flags: m.flags || undefined, owner: m.ownerName ?? undefined,
+      flags: m.flags || undefined, owner: m.ownerName ?? undefined, name: m.name ?? undefined, leash: m.leash ?? undefined,
     };
   }
 
@@ -235,7 +246,7 @@ export class MobManager {
       owner: null, ownerName: null, eggTimer: 6000 + Math.floor(Math.random() * 6000), temper: 0, riderId: null, rideTicks: 0,
       ramCooldown: 600 + Math.floor(Math.random() * 1800), ramTicks: 0, ramDir: [0, 0], actionTicks: 0, angerTicks: 0,
       angryPlayer: null, angryMob: null, mode: '', modeTicks: 0, windup: 0, stun: 0, dash: 0, dashDir: [0, 0],
-      timers: [60, 120, 300], phase: 1, dry: 0, dashHits: new Set(),
+      timers: [60, 120, 300], phase: 1, dry: 0, dashHits: new Set(), leash: null, name: null,
     };
     this.applySize(m);
     this.mobs.set(m.id, m);
@@ -273,6 +284,7 @@ export class MobManager {
       s.on = m.ownerName ?? '';
     }
     if (m.temper) s.temper = m.temper;
+    if (m.name) s.n = m.name;
     return s;
   }
 
@@ -286,7 +298,8 @@ export class MobManager {
     m.owner = s.o ?? null;
     m.ownerName = s.on ?? null;
     m.temper = s.temper ?? 0;
-    if (m.owner) this.events.state(MobManager.info(m));
+    m.name = s.n ? sanitizeMobName(s.n) : null;
+    if (m.owner || m.name) this.events.state(MobManager.info(m));
     return m;
   }
 
@@ -376,6 +389,7 @@ export class MobManager {
     if (m.riderId === null) m.body.push((dx / len) * 6 * push, 5 * push, (dz / len) * 6 * push);
     this.events.event(m.id, 'hurt', m.body.x, m.body.z);
     if (def.kind === Mob.SHADE && m.health > 0 && Math.random() < 0.5) this.blinkAway(m);
+    if (def.kind === Mob.OCTOPUS && m.health > 0) this.events.event(m.id, 'ink', m.body.x, m.body.z);
     if (m.health <= 0) {
       this.kill(m);
       return true;
@@ -411,6 +425,10 @@ export class MobManager {
     this.events.event(m.id, 'death', m.body.x, m.body.z);
     const drops = m.flags & MobFlag.BABY ? [] : m.def.drops(Math.random, m.flags);
     if (m.flags & MobFlag.SADDLED) drops.push({ id: I.SADDLE, count: 1 });
+    if (m.leash !== null) {
+      m.leash = null;
+      drops.push({ id: I.LEAD, count: 1 });
+    }
     if (m.def.boss) this.events.event(m.id, 'roar', m.body.x, m.body.z);
     this.events.drops(drops, Math.floor(m.body.x), Math.floor(m.body.y), Math.floor(m.body.z));
   }
@@ -443,6 +461,30 @@ export class MobManager {
     for (const m of this.mobs.values()) {
       if (m.owner === ownerKey && m.def.retaliates && !(m.flags & MobFlag.SITTING) && m.id !== by.mob) this.anger(m, by);
     }
+  }
+
+  // --- Leads and names ----------------------------------------------------------
+
+  /** Takes the lead off; `dropped`: it snapped (or its holder left), so the lead falls to the ground. */
+  unleash(m: MobEntity, dropped: boolean): void {
+    if (m.leash === null) return;
+    m.leash = null;
+    this.events.state(MobManager.info(m));
+    if (dropped) this.events.drops([{ id: I.LEAD, count: 1 }], Math.floor(m.body.x), Math.floor(m.body.y), Math.floor(m.body.z));
+  }
+
+  /** A player left: their leads drop. */
+  dropLeadsOf(playerId: number): void {
+    for (const m of this.mobs.values()) if (m.leash === playerId) this.unleash(m, true);
+  }
+
+  /** Names a creature (name tag). False if the name isn't allowed or it can't be named. */
+  rename(m: MobEntity, name: string): boolean {
+    const clean = sanitizeMobName(name);
+    if (!clean || m.deadTicks > 0 || m.def.boss) return false;
+    m.name = clean;
+    this.events.state(MobManager.info(m));
+    return true;
   }
 
   // --- Riding ------------------------------------------------------------------
@@ -485,13 +527,26 @@ export class MobManager {
     const tamed = (m.flags & MobFlag.TAMED) !== 0;
     const b = m.body;
 
+    // Leads: put one on, or take it off again (whoever holds it).
+    if (m.leash === who.id) {
+      this.unleash(m, false);
+      return { kind: 'give', items: [{ id: I.LEAD, count: 1 }] };
+    }
+    if (held === I.LEAD && m.leash === null) {
+      m.leash = who.id;
+      m.path = null;
+      if (m.flags & MobFlag.SITTING) this.setFlags(m, m.flags & ~MobFlag.SITTING);
+      this.events.state(MobManager.info(m));
+      return { kind: 'consume' };
+    }
+
     if (a.shear && held === I.SHEARS && !baby && !(m.flags & MobFlag.SHEARED)) {
       this.setFlags(m, m.flags | MobFlag.SHEARED);
       this.events.event(m.id, 'shear', b.x, b.z);
       return { kind: 'give', items: [{ id: I.FLEECE, count: 1 + Math.floor(Math.random() * 3) }] };
     }
     if (a.milk && held === I.BUCKET && !baby) return { kind: 'replace', stack: { id: I.MILK_BUCKET, count: 1 } };
-    if (m.def.kind === Mob.HORSE && held === I.SADDLE && tamed && !baby && !(m.flags & MobFlag.SADDLED)) {
+    if (a.ride && held === I.SADDLE && tamed && !baby && !(m.flags & MobFlag.SADDLED)) {
       this.setFlags(m, m.flags | MobFlag.SADDLED);
       return { kind: 'consume' };
     }
@@ -537,7 +592,7 @@ export class MobManager {
       return null;
     }
 
-    if (m.def.kind === Mob.HORSE && !baby) {
+    if (a.ride && !baby) {
       this.mount(m, who.id);
       return { kind: 'ride' };
     }
@@ -564,7 +619,8 @@ export class MobManager {
       let nearest = Infinity;
       for (const p of players) nearest = Math.min(nearest, Math.hypot(p.pos[0] - b.x, p.pos[2] - b.z));
       // Animals and traders stay (animals are saved when their ground unloads); monsters wander off.
-      if (b.y < -16 || (m.def.hostile && !m.def.boss && (nearest > DESPAWN_FAR || (nearest > DESPAWN_IDLE && Math.random() < 1 / 600)))) {
+      const wanders = (m.def.hostile && !m.def.boss) || m.def.ambient;
+      if (b.y < -16 || (wanders && !m.name && (nearest > DESPAWN_FAR || (nearest > DESPAWN_IDLE && Math.random() < 1 / 600)))) {
         this.remove(m.id);
         continue;
       }
@@ -654,6 +710,7 @@ export class MobManager {
     b.walkSpeed = m.def.speed;
 
     if (m.def.hostile) return this.thinkHostile(m, players, input);
+    if (m.def.ambient) return this.thinkWildlife(m, players, input, light);
     if (m.def.animal) return this.thinkAnimal(m, players, input, light);
 
     // Traders drift back home when they wander too far.
@@ -761,6 +818,26 @@ export class MobManager {
     const baby = (m.flags & MobFlag.BABY) !== 0;
     const tamed = (m.flags & MobFlag.TAMED) !== 0;
     if (baby) b.walkSpeed = m.def.speed * 1.15;
+    if (m.def.swimmer && b.inWater) b.walkSpeed = m.def.speed * 2.8;
+
+    // On a lead: follow whoever holds it (and snap if pulled too far).
+    if (m.leash !== null) {
+      const holder = players.find((p) => p.id === m.leash && p.alive);
+      const d = holder ? Math.hypot(holder.pos[0] - b.x, holder.pos[1] - b.y, holder.pos[2] - b.z) : Infinity;
+      if (!holder || d > LEAD_BREAK) {
+        this.unleash(m, true);
+      } else if (d > LEAD_SLACK) {
+        b.walkSpeed = Math.max(b.walkSpeed, m.def.speed * 1.6);
+        this.walkTo(m, input, [Math.floor(holder.pos[0]), Math.floor(holder.pos[1]), Math.floor(holder.pos[2])]);
+        if (d > LEAD_SLACK + 3) {
+          // Tugged along.
+          b.vx += ((holder.pos[0] - b.x) / d) * 0.6;
+          b.vz += ((holder.pos[2] - b.z) / d) * 0.6;
+        }
+        if (a.hops && input.forward) input.jump = b.onGround;
+        return input;
+      }
+    }
 
     // Fighting (wolves when angry; foxes hunting).
     if (m.angerTicks > 0 && this.fight(m, players, input)) return input;
@@ -868,7 +945,7 @@ export class MobManager {
 
     // Grazing: sheep eat grass (and grow their fleece back); the others just nibble.
     if (b.onGround && !m.path && Math.random() < (m.flags & MobFlag.SHEARED ? 1 / 300 : 1 / 900)) {
-      if (m.def.kind === Mob.SHEEP || m.def.kind === Mob.COW || m.def.kind === Mob.GOAT || m.def.kind === Mob.HORSE || m.def.kind === Mob.RABBIT) {
+      if ([Mob.SHEEP, Mob.COW, Mob.GOAT, Mob.HORSE, Mob.DONKEY, Mob.RABBIT].includes(m.def.kind as never)) {
         m.actionTicks = 40;
         m.anim |= MobAnim.EAT;
         return input;
@@ -1119,6 +1196,180 @@ export class MobManager {
     input.yaw = Math.atan2(-dx, -dz);
     input.forward = 1;
     input.jump = next[1] > Math.floor(b.y + 0.01) || (b.horizontalCollision && b.onGround) || b.inWater;
+  }
+
+  // --- Wildlife --------------------------------------------------------------------
+
+  private thinkWildlife(m: MobEntity, players: MobTarget[], input: MoveInput, light: number): MoveInput {
+    switch (m.def.kind) {
+      case Mob.SONGBIRD: return this.thinkBird(m, players, input, light);
+      case Mob.BAT: return this.thinkBat(m, players, input);
+      default: return this.thinkSchool(m, players, input);
+    }
+  }
+
+  /** Fish and octopuses: drift with their school under the surface, dart away from people and hits. */
+  private thinkSchool(m: MobEntity, players: MobTarget[], input: MoveInput): MoveInput {
+    const b = m.body;
+    if (!b.inWater) {
+      // Stranded: flop about and suffocate.
+      b.walkSpeed = 0.8;
+      if (++m.dry > 30 && m.dry % 20 === 0) this.hit(m.id, 1, [b.x, b.y - 1, b.z]);
+      input.yaw = m.yaw + (Math.random() - 0.5) * 2;
+      input.forward = Math.random() < 0.3 ? 1 : 0;
+      input.jump = b.onGround && Math.random() < 0.2;
+      return input;
+    }
+    m.dry = 0;
+    const octopus = m.def.kind === Mob.OCTOPUS;
+    b.walkSpeed = m.def.speed;
+    // Frightened (hit, or a swimmer close by): away fast.
+    const scarer = players.find((p) => p.alive && p.inWater && Math.hypot(p.pos[0] - b.x, p.pos[1] - b.y, p.pos[2] - b.z) < (octopus ? 3 : 4));
+    if (scarer && m.fleeTicks <= 0) {
+      m.fleeTicks = 30;
+      m.fleeFrom = [scarer.pos[0], scarer.pos[2]];
+    }
+    if (m.fleeTicks > 0) {
+      m.fleeTicks--;
+      b.walkSpeed = m.def.speed * (octopus ? 3 : 1.8);
+      m.anim |= MobAnim.FLEE;
+      const dx = b.x - m.fleeFrom[0];
+      const dz = b.z - m.fleeFrom[1];
+      const len = Math.hypot(dx, dz) || 1;
+      this.steer3d(m, input, b.x + (dx / len) * 4, b.y + b.height / 2 - 0.5, b.z + (dz / len) * 4);
+      this.stayUnder(b, input);
+      return input;
+    }
+    // Schooling: towards the middle of nearby fish of the kind, with their heading.
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    let n = 0;
+    if (!octopus) {
+      for (const o of this.mobs.values()) {
+        if (o === m || o.def.kind !== m.def.kind || o.variant !== m.variant) continue;
+        const d = Math.hypot(o.body.x - b.x, o.body.y - b.y, o.body.z - b.z);
+        if (d > 6) continue;
+        cx += o.body.x - Math.sin(o.yaw) * 2;
+        cy += o.body.y;
+        cz += o.body.z - Math.cos(o.yaw) * 2;
+        n++;
+      }
+    }
+    if (--m.modeTicks <= 0 || !m.pathGoal) {
+      const spot = this.waterNear(b.x + (Math.random() - 0.5) * (octopus ? 6 : 10), b.y - (octopus ? 1.5 : 0.5), b.z + (Math.random() - 0.5) * (octopus ? 6 : 10), 3);
+      m.pathGoal = spot ?? [Math.floor(b.x), Math.floor(b.y), Math.floor(b.z)];
+      m.modeTicks = 50 + Math.floor(Math.random() * 80);
+    }
+    const g = m.pathGoal;
+    let [tx, ty, tz] = [g[0] + 0.5, g[1] + 0.3, g[2] + 0.5];
+    if (n > 0) [tx, ty, tz] = [(tx + (cx / n) * 2) / 3, (ty + (cy / n) * 2) / 3, (tz + (cz / n) * 2) / 3];
+    if (octopus) b.walkSpeed = m.def.speed * 0.6;
+    this.steer3d(m, input, tx, ty, tz);
+    this.stayUnder(b, input);
+    return input;
+  }
+
+  /** Swimmers keep under the surface. */
+  private stayUnder(b: PlayerBody, input: MoveInput): void {
+    if (this.world.getBlock(Math.floor(b.x), Math.floor(b.y + b.height + 0.2), Math.floor(b.z)) !== B.WATER) {
+      input.jump = false;
+      input.sneak = true;
+    }
+  }
+
+  private land(m: MobEntity): void {
+    m.body.flying = m.body.hover = false;
+    m.mode = 'perch';
+    m.modeTicks = 0;
+  }
+
+  private takeOff(m: MobEntity): void {
+    m.body.flying = m.body.hover = true;
+    m.body.vy = 3;
+    m.mode = 'fly';
+    m.modeTicks = 0;
+    m.pathGoal = null;
+  }
+
+  /** Songbirds: perch, hop and peck; burst into the air (with the flock) when someone comes close. */
+  private thinkBird(m: MobEntity, players: MobTarget[], input: MoveInput, light: number): MoveInput {
+    const b = m.body;
+    m.modeTicks++;
+    const close = players.some((p) => p.alive && !p.sneaking && Math.hypot(p.pos[0] - b.x, p.pos[1] - b.y, p.pos[2] - b.z) < 5);
+    if (m.mode !== 'fly' && (close || m.fleeTicks > 0 || b.inWater)) {
+      this.takeOff(m);
+      for (const o of this.mobs.values()) {
+        if (o !== m && o.def.kind === Mob.SONGBIRD && o.mode !== 'fly' && Math.hypot(o.body.x - b.x, o.body.z - b.z) < 8) this.takeOff(o);
+      }
+    }
+    if (m.mode !== 'fly') {
+      if (m.mode !== 'perch') this.land(m);
+      m.fleeTicks = 0;
+      // Hops and pecks about; sometimes flies off by itself (more at dusk).
+      if (Math.random() < 0.02) m.anim |= MobAnim.EAT;
+      if (b.onGround && Math.random() < 0.03) {
+        input.yaw = m.yaw + (Math.random() - 0.5) * 2.5;
+        input.forward = 1;
+        input.jump = true;
+      }
+      if (m.modeTicks > 200 && Math.random() < (light < 0.4 ? 0.02 : 0.004)) this.takeOff(m);
+      return input;
+    }
+    // Flying: loop about with the flock, then pick a spot to land.
+    b.flySpeed = m.def.speed;
+    m.fleeTicks = Math.max(0, m.fleeTicks - 1);
+    if (!m.pathGoal || m.modeTicks % 50 === 0) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 5 + Math.random() * 8;
+      const x = Math.floor(b.x + Math.cos(a) * r);
+      const z = Math.floor(b.z + Math.sin(a) * r);
+      const c = this.world.getChunk(x >> 4, z >> 4);
+      const top = c ? c.heightmap[(x & 15) | ((z & 15) << 4)] : Math.floor(b.y);
+      const landing = m.modeTicks > 120 && !close;
+      m.pathGoal = [x, landing ? top + 1 : top + 4 + Math.floor(Math.random() * 6), z];
+    }
+    const g = m.pathGoal;
+    const d = this.steer3d(m, input, g[0] + 0.5, g[1] + 0.2, g[2] + 0.5);
+    const groundBelow = this.world.boxes(Math.floor(b.x), Math.floor(b.y - 0.3), Math.floor(b.z)) !== null;
+    if (m.modeTicks > 120 && d < 1 && groundBelow && this.world.getBlock(Math.floor(b.x), Math.floor(b.y - 0.3), Math.floor(b.z)) !== B.WATER) this.land(m);
+    return input;
+  }
+
+  /** Bats: flutter at random through dark places, roost upside down under a ceiling, wake when disturbed. */
+  private thinkBat(m: MobEntity, players: MobTarget[], input: MoveInput): MoveInput {
+    const b = m.body;
+    m.modeTicks++;
+    const disturbed = m.fleeTicks > 0 || players.some((p) => p.alive && Math.hypot(p.pos[0] - b.x, p.pos[1] - b.y, p.pos[2] - b.z) < 4);
+    if (m.mode === 'roost') {
+      const ceiling = this.world.boxes(Math.floor(b.x), Math.floor(b.y + b.height + 0.1), Math.floor(b.z)) !== null;
+      if (disturbed || !ceiling) {
+        m.mode = '';
+        m.modeTicks = 0;
+      } else {
+        m.anim |= MobAnim.SLEEP;
+        b.vx = b.vy = b.vz = 0;
+        return input;
+      }
+    }
+    m.fleeTicks = Math.max(0, m.fleeTicks - 1);
+    b.flySpeed = m.def.speed;
+    if (!m.pathGoal || m.modeTicks % 25 === 0) {
+      m.pathGoal = [Math.floor(b.x + (Math.random() - 0.5) * 8), Math.floor(b.y + (Math.random() - 0.4) * 4), Math.floor(b.z + (Math.random() - 0.5) * 8)];
+    }
+    const g = m.pathGoal;
+    this.steer3d(m, input, g[0] + 0.5, g[1] + 0.5, g[2] + 0.5);
+    // Roost under a ceiling it bumps into, now and then.
+    if (m.modeTicks > 160 && !disturbed && Math.random() < 0.05) {
+      const above = this.world.boxes(Math.floor(b.x), Math.floor(b.y + b.height + 0.1), Math.floor(b.z)) !== null;
+      if (above) {
+        m.mode = 'roost';
+        b.y = Math.floor(b.y + b.height + 0.1) - b.height;
+      } else {
+        m.pathGoal = [Math.floor(b.x), Math.floor(b.y) + 3, Math.floor(b.z)];
+      }
+    }
+    return input;
   }
 
   // --- Monsters with their own moves -----------------------------------------------
@@ -1525,12 +1776,13 @@ export class MobManager {
     let animals = 0;
     let water = 0;
     for (const m of this.mobs.values()) {
-      if (m.def.swimmer) water++;
+      if (m.def.swimmer && m.def.hostile) water++;
       else if (m.def.hostile) hostile++;
       else if (m.def.animal) animals++;
     }
     if (water < WATER_PER_PLAYER * alive.length && Math.random() < 0.2) this.trySpawnWater(alive);
     const sun = daylight(time);
+    this.spawnWildlife(alive, sun);
     const hostileCap = Math.min(HOSTILE_MAX, HOSTILE_PER_PLAYER * alive.length);
     for (const p of alive) {
       for (let attempt = 0; attempt < 3 && hostile < hostileCap; attempt++) {
@@ -1584,6 +1836,53 @@ export class MobManager {
     const kind = pickSpawnKind(pool, Math.random());
     const [gmin, gmax] = mobDef(kind)!.group ?? [1, 1];
     return this.spawnGroup(kind, x, y, z, Math.min(room, gmin + Math.floor(Math.random() * (gmax - gmin + 1))));
+  }
+
+  /** Wildlife: schools in the water, birds by day on grass and trees, bats in dark caves. */
+  private spawnWildlife(players: MobTarget[], sun: number): void {
+    const count = (kinds: number[]) => [...this.mobs.values()].filter((m) => kinds.includes(m.def.kind)).length;
+    const n = players.length;
+    const p = players[Math.floor(Math.random() * players.length)];
+    const swimmers = ambientFor('water');
+    if (Math.random() < 0.3 && count(swimmers) < SWIMMERS_PER_PLAYER * n) {
+      const [x, z] = this.ringSpot(p);
+      const c = this.world.getChunk(x >> 4, z >> 4);
+      const top = c ? c.heightmap[(x & 15) | ((z & 15) << 4)] : 0;
+      if (c && this.world.getBlock(x, top, z) === B.WATER && this.world.getBlock(x, top - 2, z) === B.WATER && this.farFromPlayers(players, x, z)) {
+        const kind = pickSpawnKind(swimmers, Math.random());
+        const [gmin, gmax] = mobDef(kind)!.group ?? [1, 1];
+        const variant = mobDef(kind)!.variant?.(c.biomes[(x & 15) | ((z & 15) << 4)], Math.random);
+        for (let i = 0, k = gmin + Math.floor(Math.random() * (gmax - gmin + 1)); i < k; i++) {
+          const wx = x + Math.floor(Math.random() * 3) - 1;
+          const wz = z + Math.floor(Math.random() * 3) - 1;
+          if (this.world.getBlock(wx, top - 1, wz) === B.WATER) this.spawn(kind, wx + 0.5, top - 1.5, wz + 0.5, { variant });
+        }
+      }
+    }
+    if (sun > 0.5 && Math.random() < 0.15 && count([Mob.SONGBIRD]) < BIRDS_PER_PLAYER * n) {
+      const [x, z] = this.ringSpot(p);
+      const c = this.world.getChunk(x >> 4, z >> 4);
+      if (c && this.farFromPlayers(players, x, z)) {
+        const top = c.heightmap[(x & 15) | ((z & 15) << 4)];
+        const ground = this.world.getBlock(x, top, z);
+        if (ground === B.GRASS || ground === B.ASHWOOD_LEAVES || ground === B.FROSTPINE_NEEDLES || ground === B.FROST_TURF) {
+          const variant = mobDef(Mob.SONGBIRD)!.variant!(c.biomes[(x & 15) | ((z & 15) << 4)], Math.random);
+          for (let i = 0, k = 2 + Math.floor(Math.random() * 3); i < k; i++) {
+            const bird = this.spawn(Mob.SONGBIRD, x + 0.5 + (Math.random() - 0.5) * 2, top + 1, z + 0.5 + (Math.random() - 0.5) * 2, { variant });
+            if (bird) this.land(bird);
+          }
+        }
+      }
+    }
+    if (Math.random() < 0.1 && count([Mob.BAT]) < BATS_PER_PLAYER * n) {
+      const [x, z] = this.ringSpot(p);
+      const c = this.world.getChunk(x >> 4, z >> 4);
+      if (!c || isDeep(x) || !this.farFromPlayers(players, x, z)) return;
+      let y = Math.max(4, Math.min(120, Math.floor(p.pos[1] - 4 - Math.random() * 30)));
+      while (y > 2 && !standable(this.pathWorld, x, y, z, 2)) y--;
+      const l = c.light[idx(x & 15, Math.min(255, y + 1), z & 15)];
+      if (y > 2 && (l >> 4) < 4 && (l & 15) < 8) this.spawn(Mob.BAT, x + 0.5, y + 1, z + 0.5);
+    }
   }
 
   /** Water monsters: under the surface of deep enough water, near the players, any time of day. */

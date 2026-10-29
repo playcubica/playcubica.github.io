@@ -142,7 +142,7 @@ function updateInfo(): void {
 function frameCamera(): void {
   const d = mobDef(state.kind)!;
   const one = state.mode === 'one';
-  const size = one ? Math.max(d.height, d.width * 1.4, 1.2) : (ids.length - 1) * 0.9 + 2;
+  const size = one ? Math.max(d.height, d.width * 1.4, 0.55) : (ids.length - 1) * 0.9 + 2;
   const dist = one ? size * 2.3 + 1.4 : size;
   const yaw = VIEWS[state.view].yaw + state.orbit;
   // The creatures face -z, so "front" looks at them from -z.

@@ -295,6 +295,7 @@ export class GameServer {
       session.closed = true;
       if (!this.players.has(session.id)) return;
       this.stopRiding(session);
+      this.mobs.dropLeadsOf(session.id);
       this.players.delete(session.id);
       if (session.joined) {
         this.closeWindows(session);
@@ -404,6 +405,9 @@ export class GameServer {
         break;
       case 'dismount':
         this.stopRiding(p);
+        break;
+      case 'nameMob':
+        this.nameMob(p, msg.entityId | 0, String(msg.name ?? ''));
         break;
       case 'trade':
         this.trade(p, msg.entityId | 0, msg.offer | 0);
@@ -829,6 +833,22 @@ export class GameServer {
       if (p.bossBar?.id === boss.id && p.bossBar.health === hp) continue;
       p.bossBar = { id: boss.id, health: hp };
       p.send({ t: 'bossBar', id: boss.id, name: boss.def.name, health: hp, max: boss.def.health });
+    }
+  }
+
+  /** A name tag in hand names the creature (any creature but a boss). */
+  private nameMob(p: PlayerSession, id: number, name: string): void {
+    const m = this.mobs.mobs.get(id);
+    if (!m || p.dead || p.inventory.held?.id !== I.NAME_TAG) return;
+    const b = m.body;
+    if (Math.hypot(b.x - p.pos[0], b.y - p.pos[1], b.z - p.pos[2]) > PLAYER_ATTACK_REACH + REACH_SLACK + b.width) return;
+    if (!this.mobs.rename(m, name)) {
+      this.chat(p, 'שם לא חוקי (1–24 תווים: אותיות, ספרות, רווח ו־ - _ \' .)');
+      return;
+    }
+    if (!p.creative) {
+      p.inventory.take(p.inventory.selected, 1);
+      p.sendInventory();
     }
   }
 
@@ -1342,7 +1362,7 @@ export class GameServer {
           break;
         }
         const names = Object.entries(MobFlag).filter(([, bit]) => best!.flags & bit).map(([n]) => n.toLowerCase());
-        this.chat(p, `${best.def.name} #${best.id}: ${best.health}/${best.def.health} ❤ variant ${best.variant ?? '-'} ${names.join(' ')}` +
+        this.chat(p, `${best.name ? `"${best.name}" ` : ''}${best.def.name} #${best.id}: ${Math.ceil(best.health)}/${best.def.health} ❤ variant ${best.variant ?? '-'} ${names.join(' ')} mode ${best.mode || '-'}` +
           `${best.owner ? ` owner ${best.ownerName}` : ''}${best.flags & MobFlag.BABY ? ` age ${best.age}` : ''} temper ${best.temper}`);
         break;
       }

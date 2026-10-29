@@ -3,6 +3,7 @@ import {
   BLACK, bone, both, box, c, lift, set, SPECIES, walkLegs,
   type AnimState, type Bone, type Box, type Pose, type RGB, type Species,
 } from './mobModels';
+import { WILDLIFE } from './wildlifeModels';
 
 // Cubica's monsters and traders as rigs (see mobModels.ts for the conventions). Each has its own
 // silhouette and moves: the shambling gloomwalker, the bobbing thornslinger, the eight-legged
@@ -466,5 +467,5 @@ const MONSTERS: Partial<Record<number, Species>> = {
   [Mob.MATRIARCH]: matriarch,
 };
 
-/** Every creature's rig and animator: animals and monsters. */
-export const CREATURES: Partial<Record<number, Species>> = { ...SPECIES, ...MONSTERS };
+/** Every creature's rig and animator: animals, wildlife and monsters. */
+export const CREATURES: Partial<Record<number, Species>> = { ...SPECIES, ...WILDLIFE, ...MONSTERS };

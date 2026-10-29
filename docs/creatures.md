@@ -49,13 +49,37 @@ Rewards: dusk membrane (bedroll material), raw fish (cook it; cats eat it), raw 
 lumen dust, lumen crystals and iron ingots, ember shards, and the matriarch's heart (furnace fuel that
 burns for 32,000 ticks) with diamonds.
 
+## Stage C – wildlife, more animals, leads and name tags (done)
+
+| Creature | Kind | Look / variants | Behaviour | Appears |
+|---|---|---|---|---|
+| Fish דג | wildlife | perch, salmon, 4 reef fish (orange-white, blue-yellow tail, yellow-black, purple) | schools: steer to the group's middle and heading; dart from swimmers; stranded = flops and suffocates | water, by climate (cold → salmon, warm → reef fish) |
+| Octopus תמנון | wildlife | 2 (red, purple-grey), 8 two-jointed arms | drifts low; when hit squirts ink and jets away (arms swept back) | water |
+| Songbird ציפור שיר | wildlife | robin, bluebird, sparrow, cardinal | perches, hops, pecks; the whole flock takes off when someone walks up (not sneaking); lands again | grass and treetops by day |
+| Bat עטלף | wildlife | 2 (brown, grey) | erratic flutter; roosts upside down under ceilings, wakes when disturbed | dark caves |
+| Sea turtle צב ים | animal | 2 shells; hatchling | slow on land, quick in water (flippers sweep) | beaches (sand) |
+| Donkey חמור | animal | grey, brown; long ears, back stripe; foal | broken in by riding, saddle, ride (6.5 b/s, lower jump than a horse) | plains, desert |
+
+Wildlife (`MobDef.ambient`) is not saved: it appears in its zone near players (fish 10, birds 8, bats 4 per
+player) and wanders off when nobody is near, like monsters.
+
+**Leads** (`רצועה`: silk or fleece in a diagonal, 2 per craft): right-click an animal to put one on; it
+follows its holder (walks after them beyond 3.5 blocks, is tugged beyond 6.5), and the lead snaps and
+drops beyond 12 blocks or when the holder leaves. Right-click it again to take the lead back. Drawn as a
+sagging rope from the holder's hand.
+
+**Name tags** (`תג שם`: hide over silk): right-click a creature with one → type a name (1–24 letters,
+digits, spaces, - _ ' .). The name floats above it, is saved with animals, and named monsters/wildlife
+never wander off (bosses can't be named).
+
 ## Next stages (not started)
 
-- **C – more life**: passive fish and squid-like swimmers, birds and bats, more pets/mounts; leads and name tags.
+- **D – more**: pets that carry things (pack animals), horse armour, eggs/nests, seasonal migrations.
 
 ## Known limits
 
 - Baby/adult transitions and taming are host-authoritative and synced; riding is client-driven for the
   rider (the host checks speed and moves the mount with them), like the player's own movement.
-- No leads, name tags, armour for horses, or breeding cooldown UI yet.
+- Leads aren't saved: a leashed animal is free again after the world reloads (the lead is lost).
+- No horse armour or breeding cooldown display yet.
 - Animals in chunks that never load again stay in the save (a few dozen bytes each).

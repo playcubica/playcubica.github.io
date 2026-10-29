@@ -4,7 +4,7 @@ import { bedPartner, isInteractive, isSupported, placementRaw } from '../../shar
 import type { Inventory } from '../../shared/items/Inventory';
 import { breakTime, CREATIVE_BREAK_DELAY, EAT_TIME, REACH } from '../../shared/items/mining';
 import { PLAYER_ATTACK_COOLDOWN, PLAYER_ATTACK_REACH } from '../../shared/entities/mobs';
-import { itemDef } from '../../shared/items/registry';
+import { I, itemDef } from '../../shared/items/registry';
 import { runeLevel, RUNE_SWIFT } from '../../shared/items/runes';
 import { boxOverlapsBlock } from '../../shared/physics/collision';
 import { raycast, type RayHit } from '../../shared/physics/raycast';
@@ -25,6 +25,8 @@ export interface InteractionHost {
   playerBox(): { min: number[]; max: number[] };
   /** Creative "pick block": put this block in the hotbar. */
   pickBlock(id: number): void;
+  /** Ask the player for a name for this creature (name tag in hand). */
+  nameEntity(id: number): void;
   /** Nearest creature under the crosshair. */
   pickEntity(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number): { id: number; distance: number } | null;
 }
@@ -156,7 +158,8 @@ export class BlockInteraction {
   private mouseDown(button: number): void {
     const t = this.target;
     if (button === MouseButton.RIGHT) {
-      if (this.entityTarget !== null) this.host.send({ t: 'interact', entityId: this.entityTarget });
+      if (this.entityTarget !== null && this.host.inventory.held?.id === I.NAME_TAG) this.host.nameEntity(this.entityTarget);
+      else if (this.entityTarget !== null) this.host.send({ t: 'interact', entityId: this.entityTarget });
       else if (t && this.usesBlock(t)) this.useBlock(t);
       else if (!this.canEatHeld()) {
         this.placeCooldown = 0;

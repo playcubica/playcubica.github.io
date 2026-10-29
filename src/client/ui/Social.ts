@@ -7,6 +7,8 @@ export class ChatInput {
   open = false;
   onSend: ((text: string) => void) | null = null;
   onClose: (() => void) | null = null;
+  /** A one-off question (naming a creature) instead of a chat line. */
+  private answer: ((text: string) => void) | null = null;
 
   constructor(parent: HTMLElement) {
     this.el = document.createElement('div');
@@ -21,7 +23,8 @@ export class ChatInput {
       e.stopPropagation();
       if (e.key === 'Enter') {
         const text = this.input.value.trim();
-        if (text) this.onSend?.(text);
+        const answer = this.answer;
+        if (text) (answer ?? this.onSend)?.(text);
         this.hide();
       } else if (e.key === 'Escape') {
         this.hide();
@@ -31,6 +34,9 @@ export class ChatInput {
   }
 
   show(prefix = ''): void {
+    this.answer = null;
+    this.input.maxLength = 200;
+    this.input.placeholder = 'הודעה לכולם… (Enter לשליחה, Esc לביטול, /help לפקודות)';
     this.open = true;
     this.el.style.display = '';
     this.input.value = prefix;
@@ -38,9 +44,18 @@ export class ChatInput {
     setTimeout(() => this.input.focus(), 0);
   }
 
+  /** Asks for a short text; `answer` gets it on Enter (nothing on Esc). */
+  ask(placeholder: string, maxLength: number, answer: (text: string) => void): void {
+    this.show();
+    this.answer = answer;
+    this.input.maxLength = maxLength;
+    this.input.placeholder = placeholder;
+  }
+
   hide(): void {
     if (!this.open) return;
     this.open = false;
+    this.answer = null;
     this.el.style.display = 'none';
     this.input.blur();
     this.onClose?.();

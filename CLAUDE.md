@@ -214,6 +214,13 @@ from client-reported positions (bounded by the speed check).
 - Dev gallery: `gallery.html` (dev server only, not built): every creature, variant, flags, animation,
   front/side/back/quarter views, player-size frame and hit box. Host commands: `/summon <kind> [baby]
   [variant] [count]`, `/mobinfo` (nearest creature's state), `/grow` (nearby babies grow, cooldowns end).
+- Wildlife and more (stage C; table in `docs/creatures.md`): fish, octopus, songbird, bat (`ambient`: zones
+  like monsters, own caps in `spawnWildlife`, not saved, wander off), turtle and donkey (animals; any animal
+  with `animal.ride` can be ridden/saddled). Rigs in `client/render/wildlifeModels.ts`. Leads: `MobEntity.leash`
+  (holder id, in `EntityInfo.leash`; client draws a rope via `MobRenderer.holderAt`), snap > 12 blocks or when
+  the holder leaves (`dropLeadsOf`). Name tags: client asks with `ChatInput.ask`, sends `nameMob`; host checks
+  the tag in hand + `sanitizeMobName`; `MobEntity.name` → `EntityInfo.name` (label sprite) and `SavedMob.n`;
+  named creatures never despawn.
 - Monsters (stage B; full table in `docs/creatures.md`): every one has a rig in
   `client/render/monsterModels.ts` (`CREATURES` = animals + monsters; a test fails if a kind lacks a
   model, animator, drops or a way to appear). `MobDef.zones` ('surface' | 'cave' | 'deep' | 'water' |

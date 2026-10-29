@@ -5,6 +5,7 @@ import { hash01, mulberry32 } from '../../shared/rng';
 import type { ClientWorld } from '../ClientWorld';
 import { type AnimState, type Bone, type Box, type Detail, type Pose, type RGB, type Rig } from './mobModels';
 import { CREATURES } from './monsterModels';
+import { nameTag } from './PlayerModels';
 
 // Creatures as articulated box models: every kind has its own rig and animator (mobModels.ts for
 // animals, monsterModels.ts for monsters and traders).
@@ -202,6 +203,11 @@ interface MobView {
   slam: number;
   /** Jump straight to the next position (it blinked) instead of gliding there. */
   snap: boolean;
+  /** Name-tag label and lead rope (drawn while someone holds it). */
+  name: string | null;
+  tag: THREE.Sprite | null;
+  leash: number | null;
+  rope: THREE.Line | null;
 }
 
 interface ThornView {
@@ -232,7 +238,10 @@ const PUFFS: Partial<Record<MobEventName, { color: number; count: number; size: 
   slam: { color: 0x7a6a50, count: 70, size: 0.3, rise: 0.3, grow: 4, life: 1.0 },
   stun: { color: 0xfff080, count: 10, size: 0.18, rise: 0.8, grow: 1, life: 1.4 },
   roar: { color: 0xff8030, count: 40, size: 0.2, rise: 1.2, grow: 2.5, life: 1.2 },
+  ink: { color: 0x101018, count: 50, size: 0.3, rise: 0.1, grow: 2.2, life: 1.6 },
 };
+
+const ROPE_POINTS = 12;
 
 /** Renders creatures, thorns and particles; also answers "which creature is the crosshair on". */
 export class MobRenderer {
@@ -248,6 +257,9 @@ export class MobRenderer {
   private readonly ray = new THREE.Ray();
   private readonly hitBox = new THREE.Box3();
   private readonly hitPoint = new THREE.Vector3();
+  /** Where a player is (to draw the lead they hold). */
+  holderAt: ((playerId: number) => { x: number; y: number; z: number } | null) | null = null;
+  private readonly ropeMaterial = new THREE.LineBasicMaterial({ color: 0x8a6a40 });
   /** Gallery: fixed speed / vertical speed per creature instead of measured motion. */
   readonly motion = new Map<number, { speed: number; vy: number }>();
   /** The creature this client rides: drawn where the local player is (no network lag). */
@@ -322,9 +334,10 @@ export class MobRenderer {
       kind: e.mob, variant: e.variant ?? 0, flags: e.flags ?? 0, lookKey: '', root, model, pose: new Map(),
       material: new THREE.MeshBasicMaterial({ vertexColors: true, transparent: ghost, depthWrite: !ghost }),
       x: e.x, y: e.y, z: e.z, yaw: e.yaw, tx: e.x, ty: e.y, tz: e.z, tyaw: e.yaw, anim: 0, walk: Math.random() * 6, vy: 0,
-      seed: Math.random(), hurt: 0, dying: 0, slam: Infinity, snap: false,
+      seed: Math.random(), hurt: 0, dying: 0, slam: Infinity, snap: false, name: null, tag: null, leash: e.leash ?? null, rope: null,
     };
     this.dress(view);
+    this.setName(view, e.name ?? null);
     root.position.set(e.x, e.y, e.z);
     this.scene.add(root);
     this.mobs.set(e.id, view);
@@ -337,7 +350,26 @@ export class MobRenderer {
     if (!m) return;
     m.variant = e.variant ?? 0;
     m.flags = e.flags ?? 0;
+    m.leash = e.leash ?? null;
     if (this.lookKey(m.kind, m.variant, m.flags) !== m.lookKey) this.dress(m);
+    this.setName(m, e.name ?? null);
+  }
+
+  /** Shows a name-tag label above the creature (sized for babies). */
+  private setName(m: MobView, name: string | null): void {
+    if (name === m.name) return;
+    m.name = name;
+    if (m.tag) {
+      m.root.remove(m.tag);
+      m.tag.material.map?.dispose();
+      m.tag.material.dispose();
+      m.tag = null;
+    }
+    if (!name) return;
+    const def = mobDef(m.kind)!;
+    m.tag = nameTag(name);
+    m.tag.position.y = def.height * (m.flags & MobFlag.BABY ? BABY_SCALE : 1) + 0.35;
+    m.root.add(m.tag);
   }
 
   move(data: number[]): void {
@@ -394,6 +426,11 @@ export class MobRenderer {
     if (m) {
       this.scene.remove(m.root);
       m.material.dispose();
+      this.setName(m, null);
+      if (m.rope) {
+        this.scene.remove(m.rope);
+        m.rope.geometry.dispose();
+      }
       this.mobs.delete(id);
     }
     const t = this.thorns.get(id);
@@ -490,6 +527,7 @@ export class MobRenderer {
         m.material.opacity = Math.min(0.9, Math.max(0.08, 1.1 - d / 7)) * (0.85 + Math.sin(now * 13 + m.seed * 40) * 0.15);
       }
 
+      this.updateRope(m);
       if (m.dying > 0) {
         m.dying += dt;
         m.model.rotation.z = Math.min(Math.PI / 2, m.dying * 5);
@@ -529,8 +567,41 @@ export class MobRenderer {
     }
   }
 
+  /** A lead hangs from the holder's hand to the creature's neck, sagging when slack. */
+  private updateRope(m: MobView): void {
+    const holder = m.leash !== null ? this.holderAt?.(m.leash) : null;
+    if (!holder) {
+      if (m.rope) m.rope.visible = false;
+      return;
+    }
+    if (!m.rope) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(ROPE_POINTS * 3), 3));
+      m.rope = new THREE.Line(g, this.ropeMaterial);
+      m.rope.frustumCulled = false;
+      this.scene.add(m.rope);
+    }
+    m.rope.visible = true;
+    const def = mobDef(m.kind)!;
+    const s = m.flags & MobFlag.BABY ? BABY_SCALE : 1;
+    const ax = holder.x;
+    const ay = holder.y + 1.05;
+    const az = holder.z;
+    const bx = m.x;
+    const by = m.y + def.height * s * 0.75;
+    const bz = m.z;
+    const sag = Math.max(0, 1 - Math.hypot(bx - ax, bz - az) / 4.5) * 0.6 + 0.1;
+    const pos = m.rope.geometry.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < ROPE_POINTS; i++) {
+      const t = i / (ROPE_POINTS - 1);
+      pos.setXYZ(i, ax + (bx - ax) * t, ay + (by - ay) * t - Math.sin(t * Math.PI) * sag, az + (bz - az) * t);
+    }
+    pos.needsUpdate = true;
+  }
+
   dispose(): void {
     for (const id of [...this.mobs.keys(), ...this.thorns.keys()]) this.remove(id);
+    this.ropeMaterial.dispose();
     for (const kit of this.kits.values()) {
       kit.geometries.forEach((g) => g.dispose());
       kit.texture.dispose();

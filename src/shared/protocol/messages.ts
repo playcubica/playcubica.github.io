@@ -43,6 +43,8 @@ export type ClientMsg =
   | { t: 'trade'; entityId: number; offer: number }
   /** Get off a mount (sneak). */
   | { t: 'dismount' }
+  /** Name a creature with the name tag in hand. */
+  | { t: 'nameMob'; entityId: number; name: string }
   /** Client settings the host needs. */
   | { t: 'settings'; viewDistance: number }
   /** Click in a window (see Window.ts); window 0 is the player's inventory. */
@@ -152,11 +154,13 @@ export type ServerMsg =
   | { t: 'succession'; worldId: string; code: string; order: Array<{ id: number; name: string }> };
 
 export type MobEventName = 'hurt' | 'death' | 'spores' | 'love' | 'tamed' | 'smoke' | 'baby' | 'shear' | 'ram'
-  | 'clang' | 'crit' | 'blink' | 'slam' | 'stun' | 'roar';
+  | 'clang' | 'crit' | 'blink' | 'slam' | 'stun' | 'roar' | 'ink';
 
 export type EntityInfo =
   | { id: number; kind: 'item'; x: number; y: number; z: number; item: ItemStack }
-  | { id: number; kind: 'mob'; mob: number; x: number; y: number; z: number; yaw: number; variant?: number; flags?: number; owner?: string }
+  | { id: number; kind: 'mob'; mob: number; x: number; y: number; z: number; yaw: number; variant?: number; flags?: number; owner?: string;
+      /** From a name tag. */ name?: string;
+      /** Id of the player holding its lead. */ leash?: number }
   /** A flying thorn (style 0) or ember (1); clients extrapolate it from its launch velocity. */
   | { id: number; kind: 'projectile'; x: number; y: number; z: number; vx: number; vy: number; vz: number; style?: number }
   /** Falling sand/gravel (`raw` block value); moves arrive in entityMove like items. */

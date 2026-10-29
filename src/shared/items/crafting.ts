@@ -51,6 +51,9 @@ const shaped: Shaped[] = [
   { pattern: ['I I', ' I '], keys: { I: I.IRON_INGOT }, result: { id: I.BUCKET, count: 1 } },
   { pattern: ['HHH', 'HIH'], keys: { H: I.HIDE, I: I.IRON_INGOT }, result: { id: I.SADDLE, count: 1 } },
   { pattern: [' I', 'I '], keys: { I: I.IRON_INGOT }, result: { id: I.SHEARS, count: 1 } },
+  // Leads (silk or fleece) and name tags (hide over silk).
+  { pattern: [' SS', ' SS', 'S  '], keys: { S: [I.SILK, I.FLEECE] }, result: { id: I.LEAD, count: 2 } },
+  { pattern: ['H', 'S'], keys: { H: I.HIDE, S: I.SILK }, result: { id: I.NAME_TAG, count: 1 } },
   // The ember altar wakes the Ember Deep's matriarch (right-click it there with lumen dust).
   { pattern: ['EEE', 'ELE', 'AAA'], keys: { E: I.EMBER_SHARD, L: B.LUMEN_CRYSTAL, A: B.ASHSTONE }, result: { id: B.EMBER_ALTAR, count: 1 } },
 ];

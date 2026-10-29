@@ -8,7 +8,7 @@ export type SoundName =
   | 'break' | 'place' | 'step' | 'hurt' | 'death' | 'eat' | 'pickup' | 'click' | 'door'
   | 'grunt' | 'growl' | 'thorn' | 'spores' | 'rift' | 'splash'
   | 'moo' | 'baa' | 'oink' | 'cluck' | 'neigh' | 'bark' | 'meow' | 'squeak' | 'yip' | 'bleat' | 'snort' | 'shear' | 'pop'
-  | 'screech' | 'gurgle' | 'chitter' | 'whisper' | 'roar' | 'boom' | 'clang' | 'crit';
+  | 'screech' | 'gurgle' | 'chitter' | 'whisper' | 'roar' | 'boom' | 'clang' | 'crit' | 'chirp' | 'bray';
 
 type Material = 'stone' | 'wood' | 'soft' | 'glass' | 'plant' | 'sand';
 
@@ -253,6 +253,20 @@ export class AudioEngine {
       case 'crit':
         this.tone(out, t, 'square', 900, 1800, 0.1, 0.18);
         break;
+      case 'chirp': {
+        // A little two- or three-note song.
+        const f = 2600 + Math.random() * 900;
+        for (let i = 0, n = 2 + Math.floor(Math.random() * 2); i < n; i++) this.tone(out, t + i * 0.11, 'sine', f * (1 + i * 0.12), f * (1.25 + i * 0.1), 0.08, 0.12);
+        break;
+      }
+      case 'bray': {
+        const f = 300 + Math.random() * 40;
+        for (let i = 0; i < 3; i++) {
+          this.tone(out, t + i * 0.36, 'sawtooth', f * 1.8, f * 1.5, 0.16, 0.12);
+          this.tone(out, t + i * 0.36 + 0.17, 'sawtooth', f * 0.7, f * 0.6, 0.18, 0.14);
+        }
+        break;
+      }
     }
   }
 

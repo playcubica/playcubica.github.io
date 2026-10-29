@@ -26,7 +26,7 @@ import { EntityRenderer } from './render/EntityRenderer';
 import { PlayerModels } from './render/PlayerModels';
 import { MobRenderer } from './render/MobRenderer';
 import { AudioEngine, materialOf, type SoundName } from './audio/AudioEngine';
-import { Mob } from '../shared/entities/mobs';
+import { Mob, mobDef } from '../shared/entities/mobs';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { TradeScreen } from './ui/TradeScreen';
 import { isDeep } from '../shared/world/dimensions';
@@ -69,6 +69,8 @@ const VOICES: Partial<Record<number, SoundName>> = {
   [Mob.WOLF]: 'bark', [Mob.CAT]: 'meow', [Mob.RABBIT]: 'squeak', [Mob.FOX]: 'yip', [Mob.GOAT]: 'bleat',
   [Mob.DUSKWING]: 'screech', [Mob.MIREFIN]: 'gurgle', [Mob.SKITTERLING]: 'chitter', [Mob.EMBER_MITE]: 'chitter',
   [Mob.SHADE]: 'whisper', [Mob.BRAMBLEHULK]: 'roar', [Mob.MATRIARCH]: 'roar', [Mob.CRAGBACK]: 'growl',
+  [Mob.SONGBIRD]: 'chirp', [Mob.BAT]: 'squeak', [Mob.DONKEY]: 'bray', [Mob.OCTOPUS]: 'gurgle', [Mob.FISH]: 'splash',
+  [Mob.TURTLE]: 'snort',
 };
 
 /** Max milliseconds per frame spent decoding and lighting incoming chunks. */
@@ -174,6 +176,14 @@ export class GameClient implements InteractionHost, WindowHost {
     this.entities = new EntityRenderer(this.renderer.scene, this.world);
     this.others = new PlayerModels(this.renderer.scene, this.world);
     this.mobs = new MobRenderer(this.renderer.scene, this.world);
+    // Leads are drawn from the holder's hand: this player, or another one.
+    this.mobs.holderAt = (id) => {
+      if (id === this.playerId) {
+        const b = this.player.body;
+        return { x: b.x, y: b.y, z: b.z };
+      }
+      return this.others.position(id);
+    };
     this.chatInput = new ChatInput(container);
     this.chatInput.onSend = (text) => this.send({ t: 'chat', text });
     this.chatInput.onClose = () => {
@@ -261,6 +271,13 @@ export class GameClient implements InteractionHost, WindowHost {
 
   pickEntity(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number): { id: number; distance: number } | null {
     return this.mobs.pick(origin, dir, maxDist);
+  }
+
+  nameEntity(id: number): void {
+    if (this.state !== 'playing') return;
+    this.state = 'chat';
+    this.controls.unlock();
+    this.chatInput.ask('שם ליצור… (Enter לאישור, Esc לביטול)', 24, (name) => this.send({ t: 'nameMob', entityId: id, name }));
   }
 
   playerBox(): { min: number[]; max: number[] } {
@@ -655,6 +672,7 @@ export class GameClient implements InteractionHost, WindowHost {
           else if (e === 'blink') this.audio.play('whisper', at);
           else if (e === 'slam' || e === 'stun') this.audio.play('boom', at, 'stone', 1);
           else if (e === 'roar') this.audio.play('roar', at, 'stone', 1);
+          else if (e === 'ink') this.audio.play('splash', at);
           else this.audio.play(this.voice(msg.id), at, 'stone', e === 'death' ? 1 : 0.7);
         }
         break;
@@ -677,7 +695,9 @@ export class GameClient implements InteractionHost, WindowHost {
           });
           this.mobs.setRidden(msg.entityId, () => ({ x: b.x, y: b.y, z: b.z, yaw: this.controls.yaw }));
           if (before?.id !== msg.entityId || before.steer !== !!msg.steer) {
-            this.hud.message(msg.steer ? 'Shift — לרדת' : before?.id === msg.entityId ? 'הסוס התרגל אליך! צריך אוכף כדי לרכוב עליו' : 'הסוס עוד לא מאולף… (Shift — לרדת)', true);
+            const kind = this.mobs.kindOf(msg.entityId);
+            const name = (kind !== null && mobDef(kind)?.name) || 'החיה';
+            this.hud.message(msg.steer ? 'Shift — לרדת' : before?.id === msg.entityId ? `ה${name} התרגל/ה אליך! צריך אוכף כדי לרכוב` : `ה${name} עוד לא מאולף/ת… (Shift — לרדת)`, true);
           }
         }
         break;

@@ -16,6 +16,12 @@ export const Mob = {
   RABBIT: 8,
   FOX: 9,
   GOAT: 15,
+  FISH: 24,
+  OCTOPUS: 25,
+  SONGBIRD: 26,
+  BAT: 27,
+  TURTLE: 28,
+  DONKEY: 29,
   GLOOMWALKER: 10,
   THORNSLINGER: 11,
   SKITTERLING: 12,
@@ -81,6 +87,11 @@ export interface MobDef {
   /** Heavy: barely pushed by hits. */
   heavy?: boolean;
   boss?: boolean;
+  /**
+   * Wildlife that comes and goes (fish, birds, bats): appears in its zones around players, wanders off
+   * when they leave and isn't saved. Uses the same `zones` as monsters.
+   */
+  ambient?: boolean;
   /** Neutral: fights back (with its pack) when hurt instead of fleeing. */
   retaliates?: boolean;
   /** Falls slowly (flaps its wings). */
@@ -162,6 +173,8 @@ export interface SavedMob {
   o?: string;
   on?: string;
   temper?: number;
+  /** Name from a name tag. */
+  n?: string;
 }
 
 /** Flags that are saved; the rest (ridden, angry, love) are momentary. */
@@ -271,6 +284,50 @@ const DEFS: MobDef[] = [
     zones: ['surface', 'cave'],
     drops: (r) => drop(I.SPORE_POWDER, n(r, 1, 2)),
   },
+  // --- Stage C: wildlife, a turtle and a donkey ---
+  {
+    // Schools of fish: perch in temperate water, salmon in the cold, colourful reef fish in warm water.
+    kind: Mob.FISH, key: 'fish', name: 'דג', hostile: false, width: 0.5, height: 0.35, health: 3, speed: 3.2, damage: 0,
+    ambient: true, swimmer: true, zones: ['water'], spawnWeight: 8, group: [3, 5],
+    variant: (b, r) => (b === Biome.SNOW || b === Biome.FROZEN_OCEAN || b === Biome.MOUNTAINS ? 1 : b === Biome.BEACH || b === Biome.DESERT || r() < 0.25 ? 2 + Math.floor(r() * 4) : 0),
+    drops: () => [{ id: I.RAW_FISH, count: 1 }],
+  },
+  {
+    // Drifts along the bottom; squirts ink and jets away when touched.
+    kind: Mob.OCTOPUS, key: 'octopus', name: 'תמנון', hostile: false, width: 0.8, height: 0.8, health: 10, speed: 1.6, damage: 0,
+    ambient: true, swimmer: true, zones: ['water'], spawnWeight: 2, group: [1, 1],
+    variant: (_b, r) => (r() < 0.6 ? 0 : 1),
+    drops: (r) => drop(I.RAW_FISH, n(r, 0, 1)),
+  },
+  {
+    // Small flocks that perch, hop and peck, and burst into the air when someone comes close.
+    kind: Mob.SONGBIRD, key: 'songbird', name: 'ציפור שיר', hostile: false, width: 0.35, height: 0.35, health: 2, speed: 5, damage: 0,
+    ambient: true, flier: true, zones: ['surface'], spawnWeight: 6, group: [2, 4],
+    variant: (b, r) => (b === Biome.SNOW ? 2 : Math.floor(r() * 4)),
+    drops: (r) => drop(I.FEATHER, r() < 0.5 ? 1 : 0),
+  },
+  {
+    // Flutters about caves at random and roosts upside down under ceilings.
+    kind: Mob.BAT, key: 'bat', name: 'עטלף', hostile: false, width: 0.5, height: 0.6, health: 4, speed: 3.6, damage: 0,
+    ambient: true, flier: true, zones: ['cave'], spawnWeight: 3, group: [1, 3],
+    variant: (_b, r) => (r() < 0.5 ? 0 : 1),
+    drops: () => [],
+  },
+  {
+    kind: Mob.TURTLE, key: 'turtle', name: 'צב ים', hostile: false, width: 1.0, height: 0.5, health: 20, speed: 0.9, damage: 0,
+    swimmer: true,
+    animal: { food: [I.FROSTBERRIES] },
+    habitat: { biomes: [Biome.BEACH], ground: [B.SAND], group: [2, 4], weight: 6 },
+    variant: (_b, r) => (r() < 0.7 ? 0 : 1),
+    drops: () => [],
+  },
+  {
+    kind: Mob.DONKEY, key: 'donkey', name: 'חמור', hostile: false, width: 1.2, height: 1.45, health: 18, speed: 1.9, damage: 0,
+    animal: { food: [I.SUNWHEAT, I.ASHFRUIT], tame: 'ride', ride: { speed: 6.5, jump: 8.6 } },
+    habitat: { biomes: [Biome.PLAINS, Biome.DESERT], ground: [B.GRASS, B.SAND], group: [1, 3], weight: 3 },
+    variant: (_b, r) => (r() < 0.6 ? 0 : 1),
+    drops: (r) => drop(I.HIDE, n(r, 0, 2)),
+  },
   // --- Stage B monsters (Cubica's own) ---
   {
     // A night flier with wide membrane wings: circles high, then dives. Torchlight keeps it away; sunlight burns it.
@@ -328,7 +385,7 @@ export function mobDef(kind: number): MobDef | undefined {
   return byKind.get(kind);
 }
 
-export const PASSIVE_MOBS = DEFS.filter((d) => !d.hostile && !d.trader).map((d) => d.kind);
+export const PASSIVE_MOBS = DEFS.filter((d) => !d.hostile && !d.trader && !d.ambient).map((d) => d.kind);
 /** Every creature kind, for the gallery and the summon command. */
 export const ALL_MOBS = DEFS.map((d) => d.kind);
 
@@ -340,6 +397,18 @@ export function animalsFor(biome: number): MobDef[] {
 /** Monsters that may appear by themselves in a zone. */
 export function monstersFor(zone: Zone): number[] {
   return DEFS.filter((d) => d.hostile && d.zones?.includes(zone)).map((d) => d.kind);
+}
+
+/** Wildlife that may appear by itself in a zone. */
+export function ambientFor(zone: Zone): number[] {
+  return DEFS.filter((d) => d.ambient && d.zones?.includes(zone)).map((d) => d.kind);
+}
+
+/** What a creature may be called (name tags): 1–24 letters, digits, spaces, - _ ' . */
+export function sanitizeMobName(name: unknown): string | null {
+  const s = String(name ?? '').replace(/\s+/g, ' ').trim();
+  if (s.length < 1 || s.length > 24 || !/^[\p{L}\p{N} _'.-]+$/u.test(s)) return null;
+  return s;
 }
 
 /** Boss/elite fights: the matriarch's projectiles. */

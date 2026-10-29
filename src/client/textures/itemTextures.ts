@@ -273,6 +273,23 @@ const PAINTERS: Record<number, () => Pixmap> = {
     }
     return p;
   },
+  [I.LEAD]: () => {
+    const p = blank();
+    for (let t = 0; t < 40; t++) {
+      const a = (t / 40) * Math.PI * 2.4;
+      p.set(Math.round(7 + Math.cos(a) * (3 + t / 14)), Math.round(7 + Math.sin(a) * (3 + t / 14)), shade([200, 170, 120], 0.85 + (t % 3) * 0.08));
+    }
+    for (let t = 0; t < 4; t++) p.set(12 + (t >> 1), 12 + (t & 1), [150, 150, 160]);
+    return p;
+  },
+  [I.NAME_TAG]: () => {
+    const p = blank();
+    for (let y = 5; y < 12; y++) for (let x = 3 + Math.max(0, 7 - y) + Math.max(0, y - 9); x < 14; x++) p.set(x, y, shade([214, 196, 160], 0.92 + ((x + y) % 3) * 0.04));
+    p.set(5, 8, [80, 60, 40]);
+    for (let t = 0; t < 4; t++) p.set(1 + t, 4 + t, [150, 150, 160]);
+    for (let x = 7; x < 12; x++) p.set(x, 8, [120, 100, 80]);
+    return p;
+  },
   [I.BUCKET]: () => bucket(null),
   [I.MILK_BUCKET]: () => bucket([250, 250, 246]),
   [I.SADDLE]: () => {

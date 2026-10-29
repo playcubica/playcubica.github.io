@@ -129,7 +129,7 @@ interface Quad {
 }
 
 /** A four-legged frame: legs (legFL/FR/BL/BR), body, head on the body. Species add their own features. */
-function quad(q: QuadSpec): Quad {
+export function quad(q: QuadSpec): Quad {
   const { legH, legW, legX } = q;
   const b = q.body;
   const bz = b.z ?? 0;
@@ -161,11 +161,11 @@ function quad(q: QuadSpec): Quad {
   };
 }
 
-function tail(pivot: Bone['pivot'], size: Box['size'], color: RGB, rot: Bone['rot'], o: Partial<Box> = {}): Bone {
+export function tail(pivot: Bone['pivot'], size: Box['size'], color: RGB, rot: Bone['rot'], o: Partial<Box> = {}): Bone {
   return bone('tail', pivot, [box(size, [pivot[0], pivot[1] - size[1] / 2, pivot[2]], color, o)], [], rot);
 }
 
-const baby = (l: Look) => (l.flags & MobFlag.BABY) !== 0;
+export const baby = (l: Look) => (l.flags & MobFlag.BABY) !== 0;
 
 // --- Shared animation pieces --------------------------------------------------------------
 

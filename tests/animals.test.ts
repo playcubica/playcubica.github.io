@@ -216,12 +216,13 @@ describe('animals on the host', () => {
       const targets = (w.server as unknown as { mobTargets(): never }).mobTargets();
       for (let i = 0; i < 80; i++) w.server.mobs.spawnTick(targets, 6000);
     }
-    const kinds = (w: typeof plains) => new Set([...w.server.mobs.mobs.values()].map((m) => m.def.kind));
+    // Farm animals only (birds and fish are wildlife, with their own spawning).
+    const kinds = (w: typeof plains) => new Set([...w.server.mobs.mobs.values()].filter((m) => m.def.animal).map((m) => m.def.kind));
     const pk = kinds(plains);
     expect([...pk].every((k) => mobDef(k)!.habitat!.biomes.includes(Biome.PLAINS))).toBe(true);
     expect(pk.size).toBeGreaterThan(1);
-    // The flat test desert is grass, where desert rabbits (sand only there) don't fit… nothing else lives there.
-    expect([...kinds(desert)].every((k) => k === Mob.RABBIT)).toBe(true);
+    // Only desert dwellers in the desert (rabbits, donkeys).
+    expect([...kinds(desert)].every((k) => mobDef(k)!.habitat!.biomes.includes(Biome.DESERT))).toBe(true);
   });
 
   it('keeps animals in the save and across chunk unloads, without duplicates', async () => {
