@@ -188,11 +188,19 @@ from client-reported positions (bounded by the speed check).
     damage within 4 blocks; it does NOT explode or break blocks; drops spore powder: 4 → lumen crystal).
 - Host simulation in `MobManager` (20 TPS): bodies reuse `PlayerBody`; A* (`pathfind.ts`, 300 nodes,
   partial paths when unreachable, closed doors block, climbers path up walls); targets the nearest
-  survival player within 16 blocks; creative players are ignored.
+  survival player within its `followRange` (16, gloomwalkers 32); creative players are ignored.
 - Spawning (once a second, `spawnTick`): hostiles in a 24–44 block ring where max(block light,
-  sky light × daylight) ≤ 7 (night surface or caves), cap 10 per player / 30 total; passive herds of 2–3
-  on grass with sky light ≥ 9, cap 8 per player / 24. Despawn beyond 80 blocks (hostiles also randomly
-  beyond 40). Creatures are not saved (they respawn naturally).
+  sky light × daylight) ≤ 7, on an opaque floor (never leaves/glass). While the player is on the surface
+  75% of attempts use the surface (so the cap isn't spent on caves far below), otherwise any floor within
+  ±20 of their height. Kinds by `spawnWeight` (`pickSpawnKind`): gloomwalkers 4, the rest 2; gloomwalkers
+  come in groups of 2–4 and notice players within 32 blocks (`followRange`, others 16). Cap 20 per player /
+  50 total (groups are cut to fit). Passive herds of 2–3 on grass with sky light ≥ 9, cap 8 per player /
+  24. Despawn beyond 80 blocks (hostiles also randomly beyond 32). Creatures are not saved (they respawn
+  naturally). A night simulation on a real world gives ~10–14 gloomwalkers around a surface player.
+- Looks (`MobRenderer`): box models in model pixels; each box gets a pixel-art skin (one texel per model
+  pixel) painted from its colour + a `Pattern` (fur, fleece, cloth, rags, ribs, spots, feather, chitin,
+  plain) and an optional bottom `band` (hooves, boots, cuffs). A model's skins share one canvas atlas;
+  atlas + geometries are built once per kind/variant (`kits`) and shared.
 - Combat: left-click a creature (client ray vs. boxes, takes priority over the block behind it).
   Damage: hand 1, sword = tier damage (4–7), axe = damage − 1, other tools 2; 0.4 s cooldown (host checks
   70%), reach 4 (+1.5 slack). Hits knock back and give 0.5 s invulnerability. Creatures hurting a
@@ -392,8 +400,9 @@ and art stay our own.
 - **Bed (bedroll)**: two blocks. State bits 0-1 facing (head points that way), `BED_HEAD` 4, `BED_PAIRED` 8
   (older one-block bedrolls have no PAIRED bit and keep working). `placementRaw` gives the foot; host and
   client place the head at `bedPartner()`; both halves need solid ground. `isSupported` requires the matching
-  partner, so breaking either half pops the other; only the foot drops the item. Height 9/16. Sleep: within
-  3 blocks, no hostiles within 8 horizontal / 5 vertical. Landing on it bounces (0.66 of impact, not when
+  partner, so breaking either half pops the other; only the foot drops the item. Looks: legs at the outer end of each
+  half (3 px), mattress 3–9 px, a raised pillow (9–11 px) on the head half (`bedShape`); collision stays
+  one 9/16 box. Sleep: within 3 blocks, no hostiles within 8 horizontal / 5 vertical. Landing on it bounces (0.66 of impact, not when
   sneaking; `PlayerBody.bounced` → `MoveFlag.BOUNCED`) and the host counts half the fall.
 - **Cactus**: box 14/16 wide, collision 15/16 high (`BlockDef.collision`). Touching the cell → 1 damage
   every 10 ticks to players and creatures (`tickCactus`, `MobManager.hurtWhere`); dropped items touching it are

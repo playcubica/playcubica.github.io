@@ -36,6 +36,11 @@ export interface MobDef {
   sunSensitive?: boolean;
   /** Settlement trader: never spawns naturally, stays near home, opens trades on right-click. */
   trader?: boolean;
+  /** Natural spawning: relative weight within its pool (default 2) and group size [min, max]. */
+  spawnWeight?: number;
+  group?: [number, number];
+  /** How far (blocks) a hostile notices a player (default 16). */
+  followRange?: number;
   drops: (rnd: () => number) => ItemStack[];
 }
 
@@ -61,7 +66,7 @@ const DEFS: MobDef[] = [
   },
   {
     kind: Mob.GLOOMWALKER, key: 'gloomwalker', name: 'הולך-אפלה', hostile: true, width: 0.6, height: 1.9, health: 20, speed: 2.6, damage: 3,
-    sunSensitive: true,
+    sunSensitive: true, spawnWeight: 4, group: [2, 4], followRange: 32,
     drops: (r) => drop(I.GLOOM_ASH, n(r, 0, 2)),
   },
   {
@@ -92,6 +97,14 @@ export function mobDef(kind: number): MobDef | undefined {
 
 export const PASSIVE_MOBS = DEFS.filter((d) => !d.hostile && !d.trader).map((d) => d.kind);
 export const HOSTILE_MOBS = DEFS.filter((d) => d.hostile).map((d) => d.kind);
+
+/** A creature kind from `pool` by spawn weight; `r` in [0, 1). Gloomwalkers are the most common night threat. */
+export function pickSpawnKind(pool: readonly number[], r: number): number {
+  const w = (k: number) => mobDef(k)?.spawnWeight ?? 2;
+  let left = r * pool.reduce((sum, k) => sum + w(k), 0);
+  for (const k of pool) if ((left -= w(k)) < 0) return k;
+  return pool[pool.length - 1];
+}
 
 /** Where passive herds may appear. */
 export const PASTURE_BLOCKS = new Set<number>([B.GRASS, B.FROST_TURF]);

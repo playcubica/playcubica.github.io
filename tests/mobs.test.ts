@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { B } from '../src/shared/blocks/registry';
 import { GameMode, PROTOCOL_VERSION } from '../src/shared/constants';
-import { Mob } from '../src/shared/entities/mobs';
+import { HOSTILE_MOBS, Mob, pickSpawnKind } from '../src/shared/entities/mobs';
 import { I, toolId } from '../src/shared/items/registry';
 import type { ClientMsg, ServerMsg } from '../src/shared/protocol/messages';
 import { Chunk } from '../src/shared/world/Chunk';
@@ -103,6 +103,25 @@ describe('creatures on the host', () => {
       const d = Math.hypot(m.body.x - 0.5, m.body.z - 0.5);
       expect(d).toBeGreaterThan(20);
     }
+  });
+
+  it('makes gloomwalkers the most common night creature, in groups', async () => {
+    const counts = new Map<number, number>();
+    for (let i = 0; i < 1000; i++) {
+      const k = pickSpawnKind(HOSTILE_MOBS, i / 1000);
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    const most = [...counts].sort((a, b) => b[1] - a[1])[0][0];
+    expect(most).toBe(Mob.GLOOMWALKER);
+    expect(counts.size).toBe(HOSTILE_MOBS.length);
+
+    const night = await setup(GameMode.SURVIVAL, 18000);
+    const mobs = night.server.mobs;
+    const targets = () => (night.server as unknown as { mobTargets(): never }).mobTargets();
+    for (let i = 0; i < 40; i++) mobs.spawnTick(targets(), night.server.time);
+    const walkers = [...mobs.mobs.values()].filter((m) => m.def.kind === Mob.GLOOMWALKER);
+    expect(walkers.length).toBeGreaterThan(3);
+    expect([...mobs.mobs.values()].filter((m) => m.def.hostile).length).toBeLessThanOrEqual(20);
   });
 
   it('takes hits with knockback, flees, and drops its loot when killed', async () => {

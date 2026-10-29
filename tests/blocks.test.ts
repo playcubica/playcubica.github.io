@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { B, BED_HEAD, BED_PAIRED, collisionBoxes, LEAVES_PLACED, WATER_FALLING, withState } from '../src/shared/blocks/registry';
+import { B, BED_HEAD, BED_PAIRED, blockShape, collisionBoxes, LEAVES_PLACED, WATER_FALLING, withState } from '../src/shared/blocks/registry';
 import { bedPartner, placementRaw } from '../src/shared/blocks/placement';
 import { GameMode, PROTOCOL_VERSION } from '../src/shared/constants';
 import type { Inventory } from '../src/shared/items/Inventory';
@@ -72,6 +72,25 @@ async function setup(mode = GameMode.SURVIVAL) {
 }
 
 describe('two-block bed', () => {
+  it('has legs at its two ends and a pillow on the head half', () => {
+    for (let f = 0; f < 4; f++) {
+      const [hx, , hz] = bedPartner(0, 0, 0, f | BED_PAIRED);
+      const head = blockShape(withState(B.BEDROLL, f | BED_PAIRED | BED_HEAD));
+      const foot = blockShape(withState(B.BEDROLL, f | BED_PAIRED));
+      expect(head.length).toBe(4);
+      expect(foot.length).toBe(3);
+      // Legs sit at the end away from the other half.
+      const legCentre = (b: readonly number[]) => [(b[0] + b[3]) / 2 - 8, (b[2] + b[5]) / 2 - 8];
+      const [lx, lz] = legCentre(foot[1]);
+      expect(Math.sign(lx) * hx + Math.sign(lz) * hz).toBeLessThan(0);
+      const [px, pz] = legCentre(head[3]);
+      expect(Math.sign(px) * hx + Math.sign(pz) * hz).toBeGreaterThan(0);
+      expect(head[3][4]).toBe(11);
+      // Collision stays one flat box.
+      expect(collisionBoxes(withState(B.BEDROLL, f | BED_PAIRED | BED_HEAD))).toEqual([0, 0, 0, 1, 9 / 16, 1]);
+    }
+  });
+
   it('places foot and head, drops once, and breaking either half removes both', async () => {
     const { session, send, tick, get, raw, server } = await setup();
     session.inventory.slots[0] = { id: B.BEDROLL, count: 1 };

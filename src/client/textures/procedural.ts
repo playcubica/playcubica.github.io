@@ -384,21 +384,23 @@ const PAINTERS: Record<string, (p: Pixmap, r: Rand) => void> = {
     for (let y = 0; y < 5; y++) for (let x = 1; x < 15; x++) p.set(x, y, shade([236, 232, 220], 0.95 + r() * 0.05));
     for (let x = 0; x < TEX_SIZE; x++) { p.set(x, 5, [140, 46, 42]); if (x % 4 === 1) p.set(x, 10, [140, 46, 42]); }
   },
-  // Two-block bed: the head half has a pillow, the foot half a striped blanket (both symmetric,
-  // so they read right whichever way the bed faces).
+  // Two-block bed. The tiles are symmetric so they read right whichever way the bed faces. The head
+  // half (sheet, and the raised pillow on it) is light linen; the foot half a blanket with a folded hem.
   bedroll_head(p, r) {
-    speckle(p, r, [176, 64, 58], 0.05);
-    for (let y = 2; y < 14; y++) for (let x = 2; x < 14; x++) p.set(x, y, shade([236, 232, 220], 0.93 + r() * 0.07));
-    for (let t = 2; t < 14; t++) { p.set(t, 2, [200, 196, 186]); p.set(t, 13, [200, 196, 186]); p.set(2, t, [200, 196, 186]); p.set(13, t, [200, 196, 186]); }
+    for (let y = 0; y < TEX_SIZE; y++) for (let x = 0; x < TEX_SIZE; x++) p.set(x, y, shade([234, 230, 216], 0.94 + r() * 0.06));
+    for (let t = 0; t < TEX_SIZE; t++) { p.set(t, 0, [206, 200, 186]); p.set(t, 15, [206, 200, 186]); p.set(0, t, [206, 200, 186]); p.set(15, t, [206, 200, 186]); }
   },
   bedroll_foot(p, r) {
-    speckle(p, r, [176, 64, 58], 0.05);
-    for (let t = 0; t < TEX_SIZE; t++) for (const k of [4, 11]) { p.set(t, k, [140, 46, 42]); p.set(k, t, [140, 46, 42]); }
+    for (let y = 0; y < TEX_SIZE; y++) for (let x = 0; x < TEX_SIZE; x++) p.set(x, y, shade([178, 62, 56], 0.9 + r() * 0.1));
+    for (let t = 0; t < TEX_SIZE; t++) for (const k of [3, 12]) { p.set(t, k, [214, 196, 150]); p.set(k, t, [214, 196, 150]); }
   },
+  // Image rows 5-6: pillow side, 7-9: blanket hanging over the edge, 10-12: frame, 13-15: legs.
   bedroll_side(p, r) {
     planks([160, 120, 74])(p, r);
-    for (let y = 0; y < 8; y++) for (let x = 0; x < TEX_SIZE; x++) p.set(x, y, shade([176, 64, 58], 0.9 + r() * 0.1));
-    for (let x = 0; x < TEX_SIZE; x++) p.set(x, 7, [130, 44, 40]);
+    for (let y = 0; y < 7; y++) for (let x = 0; x < TEX_SIZE; x++) p.set(x, y, shade([226, 222, 206], 0.93 + r() * 0.07));
+    for (let y = 7; y < 10; y++) for (let x = 0; x < TEX_SIZE; x++) p.set(x, y, shade([178, 62, 56], 0.88 + r() * 0.1));
+    for (let x = 0; x < TEX_SIZE; x++) { p.set(x, 9, [134, 44, 40]); p.set(x, 12, [104, 74, 44]); }
+    for (let y = 13; y < TEX_SIZE; y++) for (let x = 0; x < TEX_SIZE; x++) p.set(x, y, shade([112, 80, 48], 0.9 + r() * 0.1));
   },
   torch(p) {
     plantBase(p);

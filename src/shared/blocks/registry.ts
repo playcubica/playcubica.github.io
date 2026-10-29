@@ -259,9 +259,26 @@ def(B.CHEST, 'chest', 'Chest', {
   render: 'box', opaque: false, tex: { top: 'chest_top', bottom: 'chest_top', side: 'chest_side' }, front: 'chest_front',
   shape: () => [[1, 0, 1, 15, 14, 15]], hardness: 2.5, tool: 'axe',
 });
+// A bed half: two legs at its outer end, a mattress on a frame, and on the head half a raised pillow.
+// Boxes are described across the bed (a) and along it from the outer end inwards (l).
+function bedShape(state: number): PxBox[] {
+  if (!(state & BED_PAIRED)) return [[0, 0, 0, 16, 9, 16]];
+  const [fx, , fz] = DIR_VEC[FACING_DIR[state & 3]];
+  const out = state & BED_HEAD ? 1 : -1;
+  const dx = fx * out;
+  const dz = fz * out;
+  const box = (a0: number, a1: number, y0: number, y1: number, l0: number, l1: number): PxBox => {
+    const [p0, p1] = (dx || dz) > 0 ? [16 - l1, 16 - l0] : [l0, l1];
+    return dx ? [p0, y0, a0, p1, y1, a1] : [a0, y0, p0, a1, y1, p1];
+  };
+  const boxes = [box(0, 16, 3, 9, 0, 16), box(0, 3, 0, 3, 0, 3), box(13, 16, 0, 3, 0, 3)];
+  if (state & BED_HEAD) boxes.push(box(2, 14, 9, 11, 1, 7));
+  return boxes;
+}
+
 def(B.BEDROLL, 'bedroll', 'Bedroll', {
   render: 'box', opaque: false, tex: { top: 'bedroll_top', bottom: 'ashwood_planks', side: 'bedroll_side' },
-  shape: () => [[0, 0, 0, 16, 9, 16]], hardness: 0.2,
+  shape: bedShape, collision: () => [[0, 0, 0, 16, 9, 16]], hardness: 0.2,
   texFn: (s, d) => (d === 3 ? 'ashwood_planks' : d !== 2 ? 'bedroll_side' : !(s & BED_PAIRED) ? 'bedroll_top' : s & BED_HEAD ? 'bedroll_head' : 'bedroll_foot'),
   extraTex: ['bedroll_head', 'bedroll_foot'],
 });

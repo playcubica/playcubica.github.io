@@ -1,5 +1,5 @@
 import { B, OPAQUE } from '../../shared/blocks/registry';
-import { HOSTILE_MOBS, Mob, MOB_ATTACK_TICKS, MOB_REACH, mobDef, PASSIVE_MOBS, PASTURE_BLOCKS, SPORE_DAMAGE, SPORE_FUSE_TICKS, SPORE_RADIUS, type MobDef } from '../../shared/entities/mobs';
+import { HOSTILE_MOBS, Mob, pickSpawnKind, MOB_ATTACK_TICKS, MOB_REACH, mobDef, PASSIVE_MOBS, PASTURE_BLOCKS, SPORE_DAMAGE, SPORE_FUSE_TICKS, SPORE_RADIUS, type MobDef } from '../../shared/entities/mobs';
 import type { ItemStack } from '../../shared/items/registry';
 import { PlayerBody, type MoveInput, type WorldQuery } from '../../shared/physics/PlayerBody';
 import { raycast } from '../../shared/physics/raycast';
@@ -18,6 +18,11 @@ const TARGET_RANGE = 16;
 const DESPAWN_FAR = 80;
 const SPAWN_MIN = 24;
 const SPAWN_MAX = 44;
+/** Hostiles further than this from every player may despawn at random (so new ones appear nearer). */
+const DESPAWN_IDLE = 32;
+/** Hostile caps: per player and in total. */
+const HOSTILE_PER_PLAYER = 20;
+const HOSTILE_MAX = 50;
 const THORN_SPEED = 16;
 const THORN_GRAVITY = 6;
 
@@ -217,7 +222,7 @@ export class MobManager {
       let nearest = Infinity;
       for (const p of players) nearest = Math.min(nearest, Math.hypot(p.pos[0] - b.x, p.pos[2] - b.z));
       // Traders stay with their settlement; they go away only with its chunk.
-      if (b.y < -16 || (!m.def.trader && (nearest > DESPAWN_FAR || (m.def.hostile && nearest > 40 && Math.random() < 1 / 600)))) {
+      if (b.y < -16 || (!m.def.trader && (nearest > DESPAWN_FAR || (m.def.hostile && nearest > DESPAWN_IDLE && Math.random() < 1 / 600)))) {
         this.remove(m.id);
         continue;
       }
@@ -321,7 +326,7 @@ export class MobManager {
 
   private pickTarget(m: MobEntity, players: MobTarget[]): MobTarget | null {
     let best: MobTarget | null = null;
-    let bestD = TARGET_RANGE;
+    let bestD = m.def.followRange ?? TARGET_RANGE;
     for (const p of players) {
       if (!p.alive || p.creative) continue;
       const d = Math.hypot(p.pos[0] - m.body.x, p.pos[1] - m.body.y, p.pos[2] - m.body.z);
@@ -471,16 +476,18 @@ export class MobManager {
     for (const m of this.mobs.values()) m.def.hostile ? hostile++ : passive++;
     const sun = daylight(time);
     for (const p of alive) {
-      for (let attempt = 0; attempt < 3 && hostile < Math.min(30, 10 * alive.length); attempt++) {
-        if (this.trySpawn(p, alive, true, sun)) hostile++;
+      const hostileCap = Math.min(HOSTILE_MAX, HOSTILE_PER_PLAYER * alive.length);
+      for (let attempt = 0; attempt < 3 && hostile < hostileCap; attempt++) {
+        hostile += this.trySpawn(p, alive, true, sun, hostileCap - hostile);
       }
-      if (passive < Math.min(24, 8 * alive.length) && Math.random() < 0.35) {
-        passive += this.trySpawn(p, alive, false, sun);
+      const passiveCap = Math.min(24, 8 * alive.length);
+      if (passive < passiveCap && Math.random() < 0.35) {
+        passive += this.trySpawn(p, alive, false, sun, passiveCap - passive);
       }
     }
   }
 
-  private trySpawn(p: MobTarget, players: MobTarget[], hostile: boolean, sun: number): number {
+  private trySpawn(p: MobTarget, players: MobTarget[], hostile: boolean, sun: number, room: number): number {
     const a = Math.random() * Math.PI * 2;
     const r = SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN);
     const x = Math.floor(p.pos[0] + Math.cos(a) * r);
@@ -489,9 +496,14 @@ export class MobManager {
     if (!c) return 0;
     let y: number;
     if (hostile) {
-      // Any dark floor near the player's height: caves as well as the night surface.
-      y = Math.max(2, Math.min(250, Math.floor(p.pos[1] + (Math.random() - 0.5) * 40)));
-      while (y > 1 && !standable(this.pathWorld, x, y, z, 2)) y--;
+      // A dark floor near the player's height: mostly the surface while they are on it (so the cap
+      // isn't spent on caves far below), otherwise caves around them. Never on leaves or glass.
+      const pc = this.world.getChunk(Math.floor(p.pos[0]) >> 4, Math.floor(p.pos[2]) >> 4);
+      const onSurface = !!pc && p.pos[1] >= pc.heightmap[(Math.floor(p.pos[0]) & 15) | ((Math.floor(p.pos[2]) & 15) << 4)] - 8;
+      y = onSurface && Math.random() < 0.75
+        ? c.heightmap[(x & 15) | ((z & 15) << 4)] + 1
+        : Math.max(2, Math.min(250, Math.floor(p.pos[1] + (Math.random() - 0.5) * 40)));
+      while (y > 1 && !(standable(this.pathWorld, x, y, z, 2) && OPAQUE[this.world.getBlock(x, y - 1, z) & 0xfff])) y--;
       if (y <= 1 || this.world.getBlock(x, y, z) === B.WATER) return 0;
       const l = c.light[idx(x & 15, y, z & 15)];
       if (Math.max(l & 15, (l >> 4) * sun) > 7) return 0;
@@ -502,8 +514,9 @@ export class MobManager {
     }
     for (const q of players) if (Math.hypot(q.pos[0] - x, q.pos[2] - z) < SPAWN_MIN) return 0;
     const pool = hostile ? HOSTILE_MOBS : PASSIVE_MOBS;
-    const kind = pool[Math.floor(Math.random() * pool.length)];
-    const group = hostile ? 1 : 2 + Math.floor(Math.random() * 2);
+    const kind = pickSpawnKind(pool, Math.random());
+    const [gmin, gmax] = mobDef(kind)!.group ?? (hostile ? [1, 1] : [2, 3]);
+    const group = Math.min(room, gmin + Math.floor(Math.random() * (gmax - gmin + 1)));
     let spawned = 0;
     for (let i = 0; i < group; i++) {
       const gx = x + (i === 0 ? 0 : Math.floor(Math.random() * 5) - 2);
