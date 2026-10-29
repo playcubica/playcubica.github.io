@@ -187,6 +187,8 @@ export interface MobEvents {
 }
 
 const PERSISTENT = (d: MobDef) => !!d.animal && !d.hostile;
+/** Land animals and traders keep out of water (fish, turtles, fliers and monsters don't). */
+const LAND_BOUND = (d: MobDef) => !d.hostile && !d.swimmer && !d.flier && !d.ambient;
 
 export class MobManager {
   readonly mobs = new Map<number, MobEntity>();
@@ -711,6 +713,9 @@ export class MobManager {
 
     if (m.def.hostile) return this.thinkHostile(m, players, input);
     if (m.def.ambient) return this.thinkWildlife(m, players, input, light);
+    // In the water, or bobbing on its surface: make for the shore.
+    const wet = b.inWater || this.world.getBlock(Math.floor(b.x), Math.floor(b.y - 0.2), Math.floor(b.z)) === B.WATER;
+    if (LAND_BOUND(m.def) && wet && m.leash === null && this.swimAshore(m, input)) return input;
     if (m.def.animal) return this.thinkAnimal(m, players, input, light);
 
     // Traders drift back home when they wander too far.
@@ -1089,7 +1094,7 @@ export class MobManager {
       const z = Math.floor(pos[2]) + Math.floor(Math.random() * 5) - 2;
       const y = Math.floor(pos[1]);
       if (Math.abs(x - pos[0]) < 1 && Math.abs(z - pos[2]) < 1) continue;
-      if (!this.world.getChunk(x >> 4, z >> 4) || !standable(this.pathWorld, x, y, z, Math.ceil(m.body.height))) continue;
+      if (!this.world.getChunk(x >> 4, z >> 4) || !standable(this.pathWorld, x, y, z, Math.ceil(m.body.height), LAND_BOUND(m.def))) continue;
       m.body.x = x + 0.5;
       m.body.y = y;
       m.body.z = z + 0.5;
@@ -1159,6 +1164,71 @@ export class MobManager {
     input.forward = 1;
     input.jump = b.horizontalCollision || b.inWater;
     m.path = null;
+    if (!LAND_BOUND(m.def) || b.inWater) return;
+    // Running away along the shore rather than into the water: try turning a little, then more.
+    for (const turn of [0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8, 2.4, -2.4]) {
+      if (!this.waterAhead(b, input.yaw + turn)) {
+        input.yaw += turn;
+        return;
+      }
+    }
+    input.forward = 0;
+  }
+
+  /** Is there water (at foot level or a drop into it) just ahead in this direction? */
+  private waterAhead(b: PlayerBody, yaw: number): boolean {
+    for (const d of [0.7, 1.4]) {
+      const x = Math.floor(b.x - Math.sin(yaw) * d);
+      const z = Math.floor(b.z - Math.cos(yaw) * d);
+      const y = Math.floor(b.y + 0.01);
+      // Look down from foot level: water before solid ground means a wet step.
+      for (let dy = 0; dy >= -3; dy--) {
+        if (this.world.getBlock(x, y + dy, z) === B.WATER) return true;
+        if (this.world.boxes(x, y + dy, z)) break;
+      }
+    }
+    return false;
+  }
+
+  /** A land animal that ended up in water swims for the nearest dry ground. False if there's none near. */
+  private swimAshore(m: MobEntity, input: MoveInput): boolean {
+    const b = m.body;
+    const h = Math.max(1, Math.ceil(b.height));
+    const g = m.pathGoal;
+    if (!g || !standable(this.pathWorld, g[0], g[1], g[2], h, true) || m.pathAge++ > 200) {
+      m.pathGoal = null;
+      m.pathAge = 0;
+      let best: Cell | null = null;
+      let bestD = Infinity;
+      const bx = Math.floor(b.x);
+      const by = Math.floor(b.y);
+      const bz = Math.floor(b.z);
+      for (let r = 1; r <= 10 && !best; r++) {
+        for (let dx = -r; dx <= r; dx++) {
+          for (let dz = -r; dz <= r; dz++) {
+            if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+            for (let dy = 2; dy >= -2; dy--) {
+              if (!standable(this.pathWorld, bx + dx, by + dy, bz + dz, h, true)) continue;
+              const d = Math.hypot(dx, dy, dz);
+              if (d < bestD) {
+                bestD = d;
+                best = [bx + dx, by + dy, bz + dz];
+              }
+              break;
+            }
+          }
+        }
+      }
+      if (!best) return false;
+      m.pathGoal = best;
+    }
+    const t = m.pathGoal!;
+    m.path = null;
+    input.yaw = Math.atan2(-(t[0] + 0.5 - b.x), -(t[2] + 0.5 - b.z));
+    input.forward = 1;
+    input.jump = true;
+    b.walkSpeed = m.def.speed * 1.3;
+    return true;
   }
 
   private walkTo(m: MobEntity, input: MoveInput, goal: Cell): void {
@@ -1168,7 +1238,7 @@ export class MobManager {
     const stale = !m.path || !g || m.pathAge > 25 || Math.abs(g[0] - goal[0]) + Math.abs(g[2] - goal[2]) > 2;
     if (stale) {
       const start: Cell = [Math.floor(b.x), Math.floor(b.y + 0.01), Math.floor(b.z)];
-      m.path = findPath(this.pathWorld, start, goal, Math.max(1, Math.ceil(b.height)), 300, !!m.def.climber);
+      m.path = findPath(this.pathWorld, start, goal, Math.max(1, Math.ceil(b.height)), 300, !!m.def.climber, LAND_BOUND(m.def));
       m.pathGoal = goal;
       m.pathAge = 0;
     }
@@ -1923,7 +1993,7 @@ export class MobManager {
     for (let i = 0; i < count; i++) {
       const gx = x + (i === 0 ? 0 : Math.floor(Math.random() * 5) - 2);
       const gz = z + (i === 0 ? 0 : Math.floor(Math.random() * 5) - 2);
-      if (!standable(this.pathWorld, gx, y, gz, Math.ceil(def.height))) continue;
+      if (!standable(this.pathWorld, gx, y, gz, Math.ceil(def.height), LAND_BOUND(def))) continue;
       const own = kind === Mob.SHEEP || kind === Mob.HORSE ? undefined : variant;
       this.spawn(kind, gx + 0.5, y, gz + 0.5, { variant: own, baby: animals && Math.random() < 0.08 });
       spawned++;

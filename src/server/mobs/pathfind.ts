@@ -1,6 +1,7 @@
 // A* over the block grid for walking creatures.
 // A cell is "standable" when the creature's body fits (height in whole blocks) and the
-// block below holds it up (or the cell is water, where creatures swim).
+// block below holds it up (or the cell is water, where creatures swim). Land animals ask for
+// `dry` cells only: solid ground and no water at their feet.
 
 export interface PathWorld {
   /** True if the block blocks movement (anything with a collision box counts). */
@@ -15,8 +16,9 @@ const DIRS: Array<[number, number, number]> = [
   [1, 1, 1.42], [1, -1, 1.42], [-1, 1, 1.42], [-1, -1, 1.42],
 ];
 
-export function standable(w: PathWorld, x: number, y: number, z: number, height: number): boolean {
+export function standable(w: PathWorld, x: number, y: number, z: number, height: number, dry = false): boolean {
   for (let h = 0; h < height; h++) if (w.blocked(x, y + h, z)) return false;
+  if (dry) return w.blocked(x, y - 1, z) && !w.isWater(x, y, z);
   return w.blocked(x, y - 1, z) || w.isWater(x, y, z);
 }
 
@@ -25,7 +27,7 @@ export function standable(w: PathWorld, x: number, y: number, z: number, height:
  * after the start, or, if the goal can't be reached within `maxNodes`, the path to the
  * explored cell closest to it. Null if no step at all is possible.
  */
-export function findPath(w: PathWorld, start: Cell, goal: Cell, height: number, maxNodes = 400, climber = false): Cell[] | null {
+export function findPath(w: PathWorld, start: Cell, goal: Cell, height: number, maxNodes = 400, climber = false, dry = false): Cell[] | null {
   const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
   const h = (x: number, y: number, z: number) => Math.abs(x - goal[0]) + Math.abs(z - goal[2]) + Math.abs(y - goal[1]) * 0.5;
   interface Node { x: number; y: number; z: number; g: number; f: number; parent: Node | null }
@@ -79,7 +81,7 @@ export function findPath(w: PathWorld, start: Cell, goal: Cell, height: number, 
           for (let k = 0; k < -dy; k++) if (w.blocked(nx, cur.y - k + height - 1, nz) || w.blocked(nx, cur.y - k, nz)) clear = false;
           if (!clear) continue;
         }
-        if (!standable(w, nx, ny, nz, height)) continue;
+        if (!standable(w, nx, ny, nz, height, dry)) continue;
         const nk = key(nx, ny, nz);
         if (closed.has(nk)) break;
         const g = cur.g + cost + (dy > 0 ? 0.5 * dy : 0) + (w.isWater(nx, ny, nz) ? 1 : 0);

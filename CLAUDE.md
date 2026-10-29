@@ -214,6 +214,11 @@ from client-reported positions (bounded by the speed check).
 - Dev gallery: `gallery.html` (dev server only, not built): every creature, variant, flags, animation,
   front/side/back/quarter views, player-size frame and hit box. Host commands: `/summon <kind> [baby]
   [variant] [count]`, `/mobinfo` (nearest creature's state), `/grow` (nearby babies grow, cooldowns end).
+- Land animals keep out of water (`LAND_BOUND`: not hostile, swimmer, flier or wildlife; includes traders):
+  `findPath(..., dry)` / `standable(..., dry)` only use dry ground, fleeing (`steerAway`) turns along the
+  shore (`waterAhead`), pets teleport and herds spawn on dry cells only, and one that ends up in (or on)
+  water swims for the nearest dry cell within 10 (`swimAshore`). A lead can still drag them in; a ridden
+  horse goes where its rider steers. Monsters, fish, turtles and fliers are unaffected.
 - Wildlife and more (stage C; table in `docs/creatures.md`): fish, octopus, songbird, bat (`ambient`: zones
   like monsters, own caps in `spawnWildlife`, not saved, wander off), turtle and donkey (animals; any animal
   with `animal.ride` can be ridden/saddled). Rigs in `client/render/wildlifeModels.ts`. Leads: `MobEntity.leash`

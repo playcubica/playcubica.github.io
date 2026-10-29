@@ -162,6 +162,63 @@ describe('wildlife', () => {
   });
 });
 
+describe('land animals keep out of water', () => {
+  it("don't wade in while wandering or following food across a pond", async () => {
+    const { server, session, tick, hold, moveTo } = await setup({ at: [37.5, 10, 8.5] });
+    const animals = [Mob.SHEEP, Mob.CHICKEN, Mob.COW, Mob.PIG].map((k, i) => server.mobs.spawn(k, 28.5, 10, 5.5 + i * 2)!);
+    // The player stands out over the pond holding food each of them likes: they come to the edge, not in.
+    session.inventory.slots[0] = { id: I.SUNWHEAT, count: 8 };
+    session.inventory.slots[1] = { id: I.SEEDS, count: 8 };
+    session.inventory.slots[2] = { id: I.ASHFRUIT, count: 8 };
+    let wet = 0;
+    for (let i = 0; i < 30; i++) {
+      hold([I.SUNWHEAT, I.SEEDS, I.ASHFRUIT][i % 3], 8);
+      moveTo(37.5, 10, 8.5);
+      await tick(10);
+      for (const a of animals) if (a.body.inWater) wet++;
+    }
+    expect(wet).toBe(0);
+    // They did come up to the shore.
+    expect(Math.max(...animals.map((a) => a.body.x))).toBeGreaterThan(30);
+  });
+
+  it('flee along the shore instead of into the water', async () => {
+    const { server, tick } = await setup({ at: [27.5, 10, 8.5] });
+    const sheep = server.mobs.spawn(Mob.SHEEP, 30.5, 10, 8.5)!;
+    sheep.fleeTicks = 80;
+    sheep.fleeFrom = [27.5, 8.5];
+    let wet = 0;
+    for (let i = 0; i < 16; i++) {
+      await tick(5);
+      if (sheep.body.inWater) wet++;
+    }
+    expect(wet).toBe(0);
+  });
+
+  it('swim straight back to land if they end up in the water', async () => {
+    const { server, tick } = await setup({ at: [20.5, 10, 8.5] });
+    const hen = server.mobs.spawn(Mob.CHICKEN, 37.5, 9, 8.5)!;
+    const ewe = server.mobs.spawn(Mob.SHEEP, 40.5, 8.5, 8.5)!;
+    await tick(5);
+    expect(ewe.body.inWater).toBe(true);
+    await tick(400);
+    for (const a of [hen, ewe]) {
+      expect(a.body.inWater).toBe(false);
+      expect(server.world.getBlock(Math.floor(a.body.x), Math.floor(a.body.y - 0.5), Math.floor(a.body.z))).not.toBe(B.WATER);
+    }
+  });
+
+  it('turtles still swim', async () => {
+    const { server, tick } = await setup({ at: [20.5, 10, 8.5] });
+    // Unlike land animals, it isn't driven out: after a second it is still out in the pond.
+    const t = server.mobs.spawn(Mob.TURTLE, 40.5, 6, 8.5)!;
+    await tick(20);
+    expect(t.body.x).toBeGreaterThan(35);
+    expect(t.body.x).toBeLessThan(46);
+    expect(server.world.getBlock(Math.floor(t.body.x), Math.floor(t.body.y), Math.floor(t.body.z))).toBe(B.WATER);
+  });
+});
+
 describe('leads and name tags', () => {
   it('a lead makes an animal follow; it snaps if pulled too far; taking it off gives it back', async () => {
     const { server, session, got, tick, send, hold, moveTo } = await setup();
@@ -222,7 +279,8 @@ describe('wildlife spawning', () => {
     const w = await setup({ at: [20.5, 10, 30.5] });
     w.server.mobSpawning = true;
     const targets = w.priv.mobTargets();
-    for (let i = 0; i < 300; i++) w.server.mobs.spawnTick(targets, 6000);
+    // The pond is a small part of the spawn ring: give it plenty of tries.
+    for (let i = 0; i < 1500; i++) w.server.mobs.spawnTick(targets, 6000);
     const kinds = [...w.server.mobs.mobs.values()].map((m) => m.def.kind);
     expect(kinds).toContain(Mob.SONGBIRD);
     expect(kinds.some((k) => k === Mob.FISH || k === Mob.OCTOPUS)).toBe(true);
