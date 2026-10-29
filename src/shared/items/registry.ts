@@ -74,6 +74,10 @@ export const I = {
   MILK_BUCKET: 4128,
   SADDLE: 4129,
   SHEARS: 4130,
+  MATRIARCH_HEART: 4131,
+  DUSK_MEMBRANE: 4132,
+  RAW_FISH: 4133,
+  COOKED_FISH: 4134,
 } as const;
 
 /** Rune item ids in the order of ItemStack.runes. */
@@ -115,7 +119,7 @@ const HEBREW: Record<string, string> = {
   frostpine_planks: 'קרשי אורן כפור', rubblestone: 'אבן גוויל', glass: 'זכוכית', cut_stone: 'אבן מסותתת',
   lever: 'ידית', pressure_plate: 'לוחית לחץ', power_crystal: 'גביש כוח', relay: 'ממסר', inverter: 'מהפך',
   lamp: 'מנורת זוהר', pusher: 'דוחף', rift_stone: 'אבן בקע', ashstone: 'אבן אפר', emberstone: 'אבן גחלים',
-  ember_ore: 'עפרת גחלת', rune_table: 'שולחן רונות',
+  ember_ore: 'עפרת גחלת', rune_table: 'שולחן רונות', ember_altar: 'מזבח גחלים',
   workbench: 'שולחן מלאכה', furnace: 'כבשן', furnace_lit: 'כבשן בוער', chest: 'תיבה', bedroll: 'שק שינה',
   torch: 'לפיד', ashwood_door: 'דלת עץ', ashwood_sapling: 'שתיל עץ אפר', frostpine_sapling: 'שתיל אורן כפור',
 };
@@ -168,6 +172,11 @@ item(I.BUCKET, 'bucket', 'דלי', { maxStack: 16 });
 item(I.MILK_BUCKET, 'milk_bucket', 'דלי חלב', { maxStack: 1, food: { hunger: 3, saturation: 4 } });
 item(I.SADDLE, 'saddle', 'אוכף', { maxStack: 1 });
 item(I.SHEARS, 'shears', 'מזמרה', { maxStack: 1 });
+// Burns for a very long time (a whole stack of smelting).
+item(I.MATRIARCH_HEART, 'matriarch_heart', 'לב אם-הגחלים', { maxStack: 1, fuel: 32000 });
+item(I.DUSK_MEMBRANE, 'dusk_membrane', 'קרום דמדומים');
+item(I.RAW_FISH, 'raw_fish', 'דג נא', { food: { hunger: 2, saturation: 0.4 } });
+item(I.COOKED_FISH, 'cooked_fish', 'דג צלוי', { food: { hunger: 5, saturation: 6 } });
 item(I.HIDE, 'hide', 'עור');
 item(I.SILK, 'silk', 'חוט משי');
 item(I.GLOOM_ASH, 'gloom_ash', 'אפר אפלה', { fuel: 800 });

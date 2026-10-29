@@ -7,7 +7,8 @@ import { B } from '../../shared/blocks/registry';
 export type SoundName =
   | 'break' | 'place' | 'step' | 'hurt' | 'death' | 'eat' | 'pickup' | 'click' | 'door'
   | 'grunt' | 'growl' | 'thorn' | 'spores' | 'rift' | 'splash'
-  | 'moo' | 'baa' | 'oink' | 'cluck' | 'neigh' | 'bark' | 'meow' | 'squeak' | 'yip' | 'bleat' | 'snort' | 'shear' | 'pop';
+  | 'moo' | 'baa' | 'oink' | 'cluck' | 'neigh' | 'bark' | 'meow' | 'squeak' | 'yip' | 'bleat' | 'snort' | 'shear' | 'pop'
+  | 'screech' | 'gurgle' | 'chitter' | 'whisper' | 'roar' | 'boom' | 'clang' | 'crit';
 
 type Material = 'stone' | 'wood' | 'soft' | 'glass' | 'plant' | 'sand';
 
@@ -222,6 +223,35 @@ export class AudioEngine {
         break;
       case 'pop':
         this.tone(out, t, 'sine', 600, 1200, 0.08, 0.25);
+        break;
+      // Monsters.
+      case 'screech':
+        this.tone(out, t, 'sawtooth', 2400 + Math.random() * 400, 1500, 0.35, 0.08, 40);
+        this.noiseBurst(out, t, 0.25, 3800, 2, 0.15);
+        break;
+      case 'gurgle':
+        for (let i = 0; i < 4; i++) this.tone(out, t + i * 0.07, 'sine', 180 + Math.random() * 120, 90, 0.07, 0.25);
+        break;
+      case 'chitter':
+        for (let i = 0; i < 5; i++) this.noiseBurst(out, t + i * 0.035, 0.02, 3000 + Math.random() * 1500, 4, 0.3);
+        break;
+      case 'whisper':
+        this.noiseBurst(out, t, 0.8, 1800, 0.4, 0.3, 600);
+        break;
+      case 'roar':
+        this.tone(out, t, 'sawtooth', 70 + Math.random() * 15, 45, 1.2, 0.4, 5);
+        this.noiseBurst(out, t, 0.9, 300, 0.5, 0.5, 120);
+        break;
+      case 'boom':
+        this.tone(out, t, 'sine', 90, 30, 0.6, 0.7);
+        this.noiseBurst(out, t, 0.5, 200, 0.6, 0.8, 80);
+        break;
+      case 'clang':
+        this.tone(out, t, 'triangle', 1600, 1500, 0.25, 0.2);
+        this.tone(out, t, 'triangle', 2390, 2300, 0.2, 0.12);
+        break;
+      case 'crit':
+        this.tone(out, t, 'square', 900, 1800, 0.1, 0.18);
         break;
     }
   }

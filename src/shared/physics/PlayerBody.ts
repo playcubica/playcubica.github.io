@@ -75,6 +75,11 @@ export class PlayerBody {
   slowFall = false;
   /** Eye height while riding (sits higher). */
   eyeOverride: number | null = null;
+  /** Creatures that fly: flight speed, and they never land (flying stays on). */
+  flySpeed = FLY;
+  hover = false;
+  /** Fish-like: full speed in water, steer up/down (jump/sneak), no sinking. */
+  swimmer = false;
 
   box(x = this.x, y = this.y, z = this.z): { min: number[]; max: number[] } {
     const h = this.width / 2;
@@ -99,7 +104,7 @@ export class PlayerBody {
     const fz = Math.floor(this.z);
     this.inWater = q.isWater(fx, Math.floor(this.y + 0.4), fz);
     this.eyeInWater = q.isWater(fx, Math.floor(this.y + this.eyeHeight), fz);
-    this.sneaking = input.sneak && !this.flying;
+    this.sneaking = input.sneak && !this.flying && !this.swimmer;
     this.sprinting = input.sprint && input.forward > 0 && !this.sneaking;
 
     // Desired horizontal velocity from input.
@@ -115,8 +120,11 @@ export class PlayerBody {
     let speed: number;
     let accel: number;
     if (this.flying) {
-      speed = input.sprint ? FLY_SPRINT : FLY;
-      accel = 10;
+      speed = this.hover ? this.flySpeed : input.sprint ? FLY_SPRINT : FLY;
+      accel = this.hover ? 4 : 10;
+    } else if (this.inWater && this.swimmer) {
+      speed = this.walkSpeed;
+      accel = WATER_ACCEL;
     } else if (this.inWater) {
       speed = this.walkSpeed * 0.5 * (this.sprinting ? 1.3 : 1);
       accel = WATER_ACCEL;
@@ -141,6 +149,10 @@ export class PlayerBody {
     if (this.flying) {
       const target = (input.jump ? 1 : 0) - (input.sneak ? 1 : 0);
       this.vy += (target * speed * 0.75 - this.vy) * k;
+    } else if (this.inWater && this.swimmer) {
+      const kv = 1 - Math.exp(-WATER_DRAG * dt);
+      const target = (input.jump ? 1 : 0) - (input.sneak ? 1 : 0);
+      this.vy += (target * speed * 0.6 - this.vy) * kv;
     } else if (this.inWater) {
       // Water drag: vertical speed eases towards swimming up or slowly sinking.
       const kv = 1 - Math.exp(-WATER_DRAG * dt);
@@ -192,7 +204,7 @@ export class PlayerBody {
       this.onGround = false;
       this.bounced = true;
     }
-    if (this.onGround && this.flying) this.flying = false;
+    if (this.onGround && this.flying && !this.hover) this.flying = false;
 
     if (this.onGround || this.inWater || this.flying) this.fallSpeed = 0;
     else this.fallSpeed = Math.max(this.fallSpeed, -this.vy);

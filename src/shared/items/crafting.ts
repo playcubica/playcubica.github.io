@@ -20,7 +20,7 @@ interface Shapeless {
 const PLANKS = [B.ASHWOOD_PLANKS, B.FROSTPINE_PLANKS];
 const LOGS = [B.ASHWOOD_LOG, B.FROSTPINE_LOG];
 /** Soft materials for a bedroll. */
-const SOFT = [B.ASHWOOD_LEAVES, B.FROSTPINE_NEEDLES, I.FLEECE, I.HIDE, I.SILK];
+const SOFT = [B.ASHWOOD_LEAVES, B.FROSTPINE_NEEDLES, I.FLEECE, I.HIDE, I.SILK, I.DUSK_MEMBRANE];
 const TIER_MATERIAL: Ingredient[] = [PLANKS, B.RUBBLESTONE, I.IRON_INGOT, I.GOLD_INGOT, I.DIAMOND];
 
 /** Head/blade shapes by tool kind: pickaxe, axe, shovel, sword. */
@@ -51,6 +51,8 @@ const shaped: Shaped[] = [
   { pattern: ['I I', ' I '], keys: { I: I.IRON_INGOT }, result: { id: I.BUCKET, count: 1 } },
   { pattern: ['HHH', 'HIH'], keys: { H: I.HIDE, I: I.IRON_INGOT }, result: { id: I.SADDLE, count: 1 } },
   { pattern: [' I', 'I '], keys: { I: I.IRON_INGOT }, result: { id: I.SHEARS, count: 1 } },
+  // The ember altar wakes the Ember Deep's matriarch (right-click it there with lumen dust).
+  { pattern: ['EEE', 'ELE', 'AAA'], keys: { E: I.EMBER_SHARD, L: B.LUMEN_CRYSTAL, A: B.ASHSTONE }, result: { id: B.EMBER_ALTAR, count: 1 } },
 ];
 
 const shapeless: Shapeless[] = [
@@ -139,6 +141,7 @@ export const SMELTING: ReadonlyMap<number, number> = new Map([
   [I.RAW_MEAT, I.COOKED_MEAT],
   [I.RAW_FOWL, I.COOKED_FOWL],
   [I.EGG, I.FRIED_EGG],
+  [I.RAW_FISH, I.COOKED_FISH],
   ...LOGS.map((l) => [l, I.COAL] as [number, number]),
 ]);
 

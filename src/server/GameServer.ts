@@ -687,6 +687,8 @@ export class GameServer {
       creative: p.creative,
       sneaking: p.sneaking,
       held: p.inventory.held?.id ?? 0,
+      yaw: p.yaw,
+      inWater: this.world.getBlock(Math.floor(p.pos[0]), Math.floor(p.pos[1] + 0.5), Math.floor(p.pos[2])) === B.WATER,
       hurt: (amount: number, cause: string, from: readonly number[], push = 1) => {
         if (p.hurtCooldown > 0 || !p.alive || p.creative) return;
         p.hurtCooldown = 10;
@@ -719,7 +721,7 @@ export class GameServer {
     const tool = held ? itemDef(held.id)?.tool : undefined;
     const base = !tool ? 1 : tool.kind === 'sword' ? tool.damage : tool.kind === 'axe' ? tool.damage - 1 : 2;
     const dmg = base + runeLevel(held, RUNE_KEEN);
-    if (!this.mobs.hit(mobId, dmg, p.pos, { player: p.id, playerKey: p.saveKey })) return;
+    if (!this.mobs.hit(mobId, dmg, p.pos, { player: p.id, playerKey: p.saveKey, tool: tool?.kind })) return;
     this.mobs.ownerAttacks(p.saveKey, mobId);
     p.addExhaustion(0.1);
     if (tool) this.wearTool(p, tool.kind === 'sword' ? 1 : 2);
@@ -769,6 +771,65 @@ export class GameServer {
         break;
     }
     p.sendInventory();
+  }
+
+  /** Lumen dust on an ember altar in the Ember Deep wakes the matriarch (one at a time). */
+  private wakeMatriarch(p: PlayerSession, x: number, y: number, z: number): void {
+    if (p.inventory.held?.id !== I.LUMEN_DUST) return;
+    if (!isDeep(x)) {
+      this.chat(p, 'המזבח מתעורר רק במעמקי הגחלים.');
+      return;
+    }
+    if (this.mobs.bossesNear(x, z, 256).length > 0) {
+      this.chat(p, 'אם-הגחלים כבר ערה!');
+      return;
+    }
+    // She digs out a few blocks away from the altar, which burns out.
+    let spot: Vec3 | null = null;
+    for (let i = 0; i < 40 && !spot; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 4 + Math.random() * 3;
+      const sx = Math.floor(x + Math.cos(a) * r);
+      const sz = Math.floor(z + Math.sin(a) * r);
+      for (let sy = y + 2; sy >= y - 3; sy--) {
+        let free = !!this.world.boxes(sx, sy - 1, sz);
+        for (let dx = -1; dx <= 1 && free; dx++) for (let dz = -1; dz <= 1 && free; dz++) for (let dy = 0; dy < 3 && free; dy++) free = !this.world.boxes(sx + dx, sy + dy, sz + dz);
+        if (free) {
+          spot = [sx + 0.5, sy, sz + 0.5];
+          break;
+        }
+      }
+    }
+    if (!spot) {
+      this.chat(p, 'אין מספיק מקום סביב המזבח.');
+      return;
+    }
+    if (!p.creative) {
+      p.inventory.take(p.inventory.selected, 1);
+      p.sendInventory();
+    }
+    this.setBlockAndBroadcast(x, y, z, B.EMBERSTONE);
+    this.mobs.spawn(Mob.MATRIARCH, ...spot);
+    this.broadcastChat('🔥 אם-הגחלים התעוררה!');
+  }
+
+  /** Boss bars: every player within 64 blocks of a boss sees its health. */
+  private updateBossBars(): void {
+    for (const p of this.players.values()) {
+      if (!p.joined) continue;
+      const boss = this.mobs.bossesNear(p.pos[0], p.pos[2], 64)[0];
+      if (!boss) {
+        if (p.bossBar) {
+          p.bossBar = null;
+          p.send({ t: 'bossBar', id: null });
+        }
+        continue;
+      }
+      const hp = Math.max(0, Math.ceil(boss.health));
+      if (p.bossBar?.id === boss.id && p.bossBar.health === hp) continue;
+      p.bossBar = { id: boss.id, health: hp };
+      p.send({ t: 'bossBar', id: boss.id, name: boss.def.name, health: hp, max: boss.def.health });
+    }
   }
 
   private startRiding(p: PlayerSession, m: MobEntity): void {
@@ -1071,6 +1132,9 @@ export class GameServer {
         break;
       case B.RIFT_STONE:
         this.igniteRift(p, x, y, z);
+        break;
+      case B.EMBER_ALTAR:
+        this.wakeMatriarch(p, x, y, z);
         break;
       case B.SUNWHEAT: {
         // Spore powder makes crops grow.
@@ -1752,6 +1816,7 @@ export class GameServer {
     this.items.tick(this.players.values(), this.tickCount);
     const targets = this.mobTargets();
     this.mobs.tick(targets, this.time, this.tickCount);
+    if (this.tickCount % 5 === 0) this.updateBossBars();
     if (this.mobSpawning && this.tickCount % 20 === 0) this.mobs.spawnTick(targets, this.time);
     this.tickFurnaces();
     this.tickPower();

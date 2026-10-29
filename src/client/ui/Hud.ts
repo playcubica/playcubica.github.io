@@ -107,6 +107,7 @@ export class Hud {
   private readonly air = new StatBar('bubble', 'air');
   private readonly messages: HTMLDivElement;
   private readonly eatBar: HTMLDivElement;
+  private readonly bossBar: HTMLDivElement;
   private toastTimer = 0;
   private hurtTimer = 0;
   private lastSelected = -1;
@@ -153,8 +154,22 @@ export class Hud {
 
     const crosshair = document.createElement('div');
     crosshair.className = 'crosshair';
-    this.root.append(this.water, this.hurt, crosshair, this.messages, bottom);
+    this.bossBar = document.createElement('div');
+    this.bossBar.className = 'boss-bar';
+    this.bossBar.dir = 'rtl';
+    this.bossBar.append(document.createElement('span'), document.createElement('div'));
+    (this.bossBar.lastChild as HTMLDivElement).appendChild(document.createElement('div'));
+    this.bossBar.style.display = 'none';
+    this.root.append(this.water, this.hurt, crosshair, this.bossBar, this.messages, bottom);
     parent.appendChild(this.root);
+  }
+
+  /** A boss fight: its name and health (null hides the bar). */
+  setBossBar(name: string | null, health = 0, max = 1): void {
+    this.bossBar.style.display = name ? '' : 'none';
+    if (!name) return;
+    (this.bossBar.firstChild as HTMLSpanElement).textContent = name;
+    ((this.bossBar.lastChild as HTMLDivElement).firstChild as HTMLDivElement).style.width = `${Math.max(0, Math.min(1, health / max)) * 100}%`;
   }
 
   update(inv: Inventory, underwater: boolean, dt: number): void {

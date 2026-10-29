@@ -67,6 +67,8 @@ const HOST_TIMEOUT_MS = 20_000;
 const VOICES: Partial<Record<number, SoundName>> = {
   [Mob.COW]: 'moo', [Mob.SHEEP]: 'baa', [Mob.PIG]: 'oink', [Mob.CHICKEN]: 'cluck', [Mob.HORSE]: 'neigh',
   [Mob.WOLF]: 'bark', [Mob.CAT]: 'meow', [Mob.RABBIT]: 'squeak', [Mob.FOX]: 'yip', [Mob.GOAT]: 'bleat',
+  [Mob.DUSKWING]: 'screech', [Mob.MIREFIN]: 'gurgle', [Mob.SKITTERLING]: 'chitter', [Mob.EMBER_MITE]: 'chitter',
+  [Mob.SHADE]: 'whisper', [Mob.BRAMBLEHULK]: 'roar', [Mob.MATRIARCH]: 'roar', [Mob.CRAGBACK]: 'growl',
 };
 
 /** Max milliseconds per frame spent decoding and lighting incoming chunks. */
@@ -648,12 +650,20 @@ export class GameClient implements InteractionHost, WindowHost {
           else if (e === 'love' || e === 'tamed' || e === 'baby') this.audio.play('pop', at);
           else if (e === 'smoke') this.audio.play('snort', at);
           else if (e === 'shear') this.audio.play('shear', at);
+          else if (e === 'clang') this.audio.play('clang', at);
+          else if (e === 'crit') this.audio.play('crit', at);
+          else if (e === 'blink') this.audio.play('whisper', at);
+          else if (e === 'slam' || e === 'stun') this.audio.play('boom', at, 'stone', 1);
+          else if (e === 'roar') this.audio.play('roar', at, 'stone', 1);
           else this.audio.play(this.voice(msg.id), at, 'stone', e === 'death' ? 1 : 0.7);
         }
         break;
       }
       case 'mobState':
         this.mobs.state(msg.entity);
+        break;
+      case 'bossBar':
+        this.hud.setBossBar(msg.id === null ? null : msg.name ?? '', msg.health, msg.max);
         break;
       case 'ride':
         if (msg.entityId === null) {
@@ -833,7 +843,7 @@ export class GameClient implements InteractionHost, WindowHost {
     this.meshes.update(body.x, body.z);
     this.entities.update(dt, sky.daylight);
     this.others.update(dt, sky.daylight);
-    this.mobs.update(dt, sky.daylight);
+    this.mobs.update(dt, sky.daylight, cam.position);
     if (this.options.remote && this.state !== 'disconnected' && performance.now() - this.lastHostMessage > HOST_TIMEOUT_MS) {
       this.transport.close('המארח לא מגיב');
       this.disconnect('המארח לא הגיב 20 שניות — ייתכן שהוא סגר את המשחק או שהחיבור נפל.');

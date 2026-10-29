@@ -106,6 +106,7 @@ export const B = {
   EMBER_ORE: 57,
   MAGMA: 58,
   RUNE_TABLE: 59,
+  EMBER_ALTAR: 60,
 } as const;
 
 // --- Block state helpers -----------------------------------------------------
@@ -330,6 +331,7 @@ def(B.ASHSTONE, 'ashstone', 'Ashstone', stoneLike(1.5));
 def(B.EMBERSTONE, 'emberstone', 'Emberstone', { ...stoneLike(1.2), lightEmit: 10 });
 def(B.EMBER_ORE, 'ember_ore', 'Ember Ore', { ...stoneLike(3), harvest: 2 });
 def(B.MAGMA, 'magma', 'Magma', { render: 'liquid', opaque: false, solid: false, translucent: true, replaceable: true, lightEmit: 15, hardness: -1 });
+def(B.EMBER_ALTAR, 'ember_altar', 'Ember Altar', { tex: { top: 'ember_altar_top', bottom: 'ashstone', side: 'ember_altar_side' }, lightEmit: 7, hardness: 4, tool: 'pickaxe', harvest: 1 });
 def(B.RUNE_TABLE, 'rune_table', 'Rune Table', { tex: { top: 'rune_table_top', bottom: 'cut_stone', side: 'rune_table_side' }, hardness: 3, tool: 'pickaxe', harvest: 1 });
 
 export const BLOCKS: readonly BlockDef[] = defs;

@@ -113,6 +113,8 @@ export type ServerMsg =
   /** Creature movement, flat [id, x, y, z, yaw, anim, …] (10 Hz). */
   | { t: 'mobMove'; data: number[] }
   | { t: 'entityEvent'; id: number; event: MobEventName }
+  /** A boss fight nearby: its health (id null = no boss bar any more). */
+  | { t: 'bossBar'; id: number | null; name?: string; health?: number; max?: number }
   /** A creature's flags (MobFlag), look or owner changed. */
   | { t: 'mobState'; entity: EntityInfo }
   /**
@@ -149,12 +151,13 @@ export type ServerMsg =
    */
   | { t: 'succession'; worldId: string; code: string; order: Array<{ id: number; name: string }> };
 
-export type MobEventName = 'hurt' | 'death' | 'spores' | 'love' | 'tamed' | 'smoke' | 'baby' | 'shear' | 'ram';
+export type MobEventName = 'hurt' | 'death' | 'spores' | 'love' | 'tamed' | 'smoke' | 'baby' | 'shear' | 'ram'
+  | 'clang' | 'crit' | 'blink' | 'slam' | 'stun' | 'roar';
 
 export type EntityInfo =
   | { id: number; kind: 'item'; x: number; y: number; z: number; item: ItemStack }
   | { id: number; kind: 'mob'; mob: number; x: number; y: number; z: number; yaw: number; variant?: number; flags?: number; owner?: string }
-  /** A flying thorn; clients extrapolate it from its launch velocity. */
-  | { id: number; kind: 'projectile'; x: number; y: number; z: number; vx: number; vy: number; vz: number }
+  /** A flying thorn (style 0) or ember (1); clients extrapolate it from its launch velocity. */
+  | { id: number; kind: 'projectile'; x: number; y: number; z: number; vx: number; vy: number; vz: number; style?: number }
   /** Falling sand/gravel (`raw` block value); moves arrive in entityMove like items. */
   | { id: number; kind: 'block'; raw: number; x: number; y: number; z: number };

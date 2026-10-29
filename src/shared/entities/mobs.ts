@@ -20,6 +20,13 @@ export const Mob = {
   THORNSLINGER: 11,
   SKITTERLING: 12,
   SPORECAP: 13,
+  DUSKWING: 16,
+  MIREFIN: 17,
+  CRAGBACK: 18,
+  SHADE: 19,
+  BRAMBLEHULK: 21,
+  EMBER_MITE: 22,
+  MATRIARCH: 23,
   TRADER: 20,
 } as const;
 
@@ -55,12 +62,33 @@ export interface MobDef {
   habitat?: Habitat;
   /** Picks a look for a new creature (stable for its whole life). */
   variant?: (biome: number, rnd: () => number) => number;
+  /**
+   * Where a monster appears by itself: 'surface' (dark ground under the sky), 'cave' (dark floors
+   * underground), 'deep' (the Ember Deep), 'water' (in water, any light), 'air' (above the night surface).
+   * No zones = never spawns naturally (bosses, traders).
+   */
+  zones?: Zone[];
+  /** Flies (no gravity, steers in 3D). */
+  flier?: boolean;
+  /** Swims in water in 3D and flops about on land. */
+  swimmer?: boolean;
+  /** Damage taken from the front (shell); a pickaxe cracks it (double damage from any side). */
+  frontArmor?: number;
+  /** Damage taken from behind (a weak spot). */
+  backWeakness?: number;
+  /** Keeps away from block light at or above this level. */
+  fearsLight?: number;
+  /** Heavy: barely pushed by hits. */
+  heavy?: boolean;
+  boss?: boolean;
   /** Neutral: fights back (with its pack) when hurt instead of fleeing. */
   retaliates?: boolean;
   /** Falls slowly (flaps its wings). */
   slowFall?: boolean;
   drops: (rnd: () => number, flags: number) => ItemStack[];
 }
+
+export type Zone = 'surface' | 'cave' | 'deep' | 'water' | 'air';
 
 export interface AnimalInfo {
   /** Items it eats: feeding an adult starts breeding, feeding a baby makes it grow faster. */
@@ -108,7 +136,15 @@ export const MobFlag = {
 } as const;
 
 /** Bits of the anim value sent in mobMove. */
-export const MobAnim = { ATTACK: 1, FUSE: 2, FLEE: 4, EAT: 8, SLEEP: 16, RAM: 32 } as const;
+export const MobAnim = {
+  ATTACK: 1, FUSE: 2, FLEE: 4, EAT: 8, SLEEP: 16, RAM: 32,
+  /** Winding up a big attack (slam, charge). */
+  WINDUP: 64,
+  /** Stunned / curled up in its shell. */
+  STUN: 128,
+  /** Diving / charging. */
+  DASH: 256,
+} as const;
 
 /** A creature kept in the world save (animals; hostiles and traders are not saved). */
 export interface SavedMob {
@@ -189,7 +225,7 @@ const DEFS: MobDef[] = [
   },
   {
     kind: Mob.CAT, key: 'cat', name: 'חתול', hostile: false, width: 0.6, height: 0.7, health: 10, speed: 2.0, damage: 0,
-    animal: { food: [I.RAW_FOWL, I.COOKED_FOWL], tame: { items: [I.RAW_FOWL], chance: 1 / 3 } },
+    animal: { food: [I.RAW_FOWL, I.COOKED_FOWL, I.RAW_FISH, I.COOKED_FISH], tame: { items: [I.RAW_FOWL, I.RAW_FISH], chance: 1 / 3 } },
     variant: (_b, r) => Math.floor(r() * 6),
     drops: () => [],
   },
@@ -217,21 +253,67 @@ const DEFS: MobDef[] = [
   },
   {
     kind: Mob.GLOOMWALKER, key: 'gloomwalker', name: 'הולך-אפלה', hostile: true, width: 0.6, height: 1.9, health: 20, speed: 2.6, damage: 3,
-    sunSensitive: true, spawnWeight: 4, group: [2, 4], followRange: 32,
+    sunSensitive: true, spawnWeight: 4, group: [2, 4], followRange: 32, zones: ['surface', 'cave'],
     drops: (r) => drop(I.GLOOM_ASH, n(r, 0, 2)),
   },
   {
     kind: Mob.THORNSLINGER, key: 'thornslinger', name: 'קוצן', hostile: true, width: 0.8, height: 1.1, health: 16, speed: 2.0, damage: 2,
+    zones: ['surface', 'cave'],
     drops: (r) => drop(I.STICK, n(r, 1, 3)),
   },
   {
     kind: Mob.SKITTERLING, key: 'skitterling', name: 'זחלן', hostile: true, width: 1.2, height: 0.6, health: 12, speed: 3.8, damage: 2,
-    climber: true,
+    climber: true, zones: ['surface', 'cave'],
     drops: (r) => drop(I.SILK, n(r, 0, 2)),
   },
   {
     kind: Mob.SPORECAP, key: 'sporecap', name: 'פטריון', hostile: true, width: 0.8, height: 1.3, health: 14, speed: 2.2, damage: 0,
+    zones: ['surface', 'cave'],
     drops: (r) => drop(I.SPORE_POWDER, n(r, 1, 2)),
+  },
+  // --- Stage B monsters (Cubica's own) ---
+  {
+    // A night flier with wide membrane wings: circles high, then dives. Torchlight keeps it away; sunlight burns it.
+    kind: Mob.DUSKWING, key: 'duskwing', name: 'כנף-דמדומים', hostile: true, width: 0.9, height: 0.6, health: 10, speed: 5.5, damage: 3,
+    flier: true, sunSensitive: true, fearsLight: 9, followRange: 28, zones: ['air'], spawnWeight: 2, group: [1, 2],
+    drops: (r) => drop(I.DUSK_MEMBRANE, n(r, 0, 2)),
+  },
+  {
+    // A lurking eel with a glowing lure; bites swimmers, flops helplessly on land.
+    kind: Mob.MIREFIN, key: 'mirefin', name: 'סנפיר-ביצה', hostile: true, width: 0.7, height: 0.5, health: 12, speed: 4.2, damage: 3,
+    swimmer: true, followRange: 16, zones: ['water'], spawnWeight: 2, group: [1, 2],
+    drops: (r) => drop(I.RAW_FISH, n(r, 1, 2)),
+  },
+  {
+    // A slow cave crawler under a stone shell: blows from the front barely scratch it (a pickaxe cracks it).
+    kind: Mob.CRAGBACK, key: 'cragback', name: 'גב-סלע', hostile: true, width: 1.1, height: 0.9, health: 24, speed: 1.6, damage: 5,
+    frontArmor: 0.2, heavy: true, zones: ['cave'], spawnWeight: 3, group: [1, 1],
+    drops: (r) => [...drop(B.RUBBLESTONE, n(r, 1, 3)), ...drop(I.RAW_IRON, n(r, 0, 2))],
+  },
+  {
+    // A hooded wraith, almost invisible until close; blinks behind its prey. Bright light drives it off.
+    kind: Mob.SHADE, key: 'shade', name: 'צל-חלול', hostile: true, width: 0.6, height: 1.9, health: 16, speed: 2.4, damage: 4,
+    fearsLight: 10, followRange: 24, zones: ['surface', 'cave'], spawnWeight: 1, group: [1, 1],
+    drops: (r) => drop(I.LUMEN_DUST, n(r, 1, 2)),
+  },
+  {
+    // A rare hulking giant of rock and roots: winds up and slams the ground. Its glowing core on the back is soft.
+    kind: Mob.BRAMBLEHULK, key: 'bramblehulk', name: 'ענק-קוצים', hostile: true, width: 1.4, height: 2.7, health: 60, speed: 1.7, damage: 8,
+    backWeakness: 2, heavy: true, followRange: 24, zones: ['surface'], spawnWeight: 0.4, group: [1, 1],
+    drops: (r) => [...drop(B.LUMEN_CRYSTAL, n(r, 1, 2)), ...drop(I.IRON_INGOT, n(r, 1, 3)), ...drop(I.STICK, n(r, 2, 5))],
+  },
+  {
+    // Glowing beetles of the Ember Deep that swarm and leap.
+    kind: Mob.EMBER_MITE, key: 'ember_mite', name: 'קרדית-גחלים', hostile: true, width: 0.5, height: 0.4, health: 4, speed: 3.4, damage: 1,
+    followRange: 20, zones: ['deep'], spawnWeight: 4, group: [3, 5],
+    drops: (r) => drop(I.EMBER_SHARD, r() < 0.4 ? 1 : 0),
+  },
+  {
+    // Boss of the Ember Deep, woken at an ember altar: charges (and stuns itself on walls), spits embers,
+    // and calls mites when hurt.
+    kind: Mob.MATRIARCH, key: 'matriarch', name: 'אם-הגחלים', hostile: true, width: 2.6, height: 2.0, health: 300, speed: 2.0, damage: 9,
+    boss: true, heavy: true, followRange: 48,
+    drops: (r) => [{ id: I.MATRIARCH_HEART, count: 1 }, ...drop(I.EMBER_SHARD, n(r, 10, 16)), ...drop(I.DIAMOND, n(r, 2, 4))],
   },
 ];
 
@@ -254,6 +336,14 @@ export const ALL_MOBS = DEFS.map((d) => d.kind);
 export function animalsFor(biome: number): MobDef[] {
   return DEFS.filter((d) => d.habitat?.biomes.includes(biome));
 }
+
+/** Monsters that may appear by themselves in a zone. */
+export function monstersFor(zone: Zone): number[] {
+  return DEFS.filter((d) => d.hostile && d.zones?.includes(zone)).map((d) => d.kind);
+}
+
+/** Boss/elite fights: the matriarch's projectiles. */
+export const EMBER_DAMAGE = 4;
 
 /** Size factor of a baby's body and hit box. */
 export const BABY_SCALE = 0.5;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { B } from '../src/shared/blocks/registry';
 import { GameMode, PROTOCOL_VERSION } from '../src/shared/constants';
-import { HOSTILE_MOBS, Mob, pickSpawnKind } from '../src/shared/entities/mobs';
+import { Mob, monstersFor, pickSpawnKind } from '../src/shared/entities/mobs';
 import { I, toolId } from '../src/shared/items/registry';
 import type { ClientMsg, ServerMsg } from '../src/shared/protocol/messages';
 import { Chunk } from '../src/shared/world/Chunk';
@@ -109,13 +109,14 @@ describe('creatures on the host', () => {
 
   it('makes gloomwalkers the most common night creature, in groups', async () => {
     const counts = new Map<number, number>();
+    const surface = monstersFor('surface');
     for (let i = 0; i < 1000; i++) {
-      const k = pickSpawnKind(HOSTILE_MOBS, i / 1000);
+      const k = pickSpawnKind(surface, i / 1000);
       counts.set(k, (counts.get(k) ?? 0) + 1);
     }
     const most = [...counts].sort((a, b) => b[1] - a[1])[0][0];
     expect(most).toBe(Mob.GLOOMWALKER);
-    expect(counts.size).toBe(HOSTILE_MOBS.length);
+    expect(counts.size).toBe(surface.length);
 
     const night = await setup(GameMode.SURVIVAL, 18000);
     const mobs = night.server.mobs;

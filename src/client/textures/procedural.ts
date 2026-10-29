@@ -531,6 +531,19 @@ const PAINTERS: Record<string, (p: Pixmap, r: Rand) => void> = {
     speckle(p, r, [46, 36, 64], 0.1);
     blobs(p, r, [110, 70, 170], 5, 3, 0.1);
   },
+  ember_altar_side(p, r) {
+    speckle(p, r, [58, 50, 50], 0.12);
+    for (let x = 0; x < TEX_SIZE; x++) { p.set(x, 0, [40, 34, 34]); p.set(x, 15, [40, 34, 34]); }
+    for (let y = 4; y < 12; y++) for (const x of [3, 12]) p.set(x, y, [250, 120 + y * 6, 40]);
+    for (let x = 5; x < 11; x++) p.set(x, 8, [230, 90, 30]);
+  },
+  ember_altar_top(p, r) {
+    speckle(p, r, [58, 50, 50], 0.12);
+    for (let y = 3; y < 13; y++) for (let x = 3; x < 13; x++) {
+      const d = Math.hypot(x - 7.5, y - 7.5);
+      if (d < 4.5) p.set(x, y, d < 2 ? [255, 210, 90] : [235, 110 - d * 8, 30]);
+    }
+  },
   rift_stone_top(p, r) {
     speckle(p, r, [46, 36, 64], 0.1);
     for (let t = 0; t < 12; t++) {

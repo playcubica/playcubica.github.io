@@ -65,10 +65,16 @@ export interface AnimState {
   flags: number;
   /** A per-creature random number 0..1 (so idle motions don't sync up). */
   seed: number;
+  /** Seconds since its last big hit on the ground ('slam' event); Infinity if none. */
+  slam: number;
 }
 
 /** The posable parts of a built model, by bone name. */
-export type Pose = Map<string, { obj: { rotation: { x: number; y: number; z: number; set(x: number, y: number, z: number): void }; position: { x: number; y: number; z: number } }; rest: [number, number, number]; base: [number, number, number] }>;
+export type Pose = Map<string, {
+  obj: { rotation: { x: number; y: number; z: number; set(x: number, y: number, z: number): void }; position: { x: number; y: number; z: number }; scale: { setScalar(n: number): void } };
+  rest: [number, number, number];
+  base: [number, number, number];
+}>;
 
 export interface Species {
   build(look: Look): Rig;
@@ -79,19 +85,19 @@ export interface Species {
   variants: number[];
 }
 
-const range = (n: number) => Array.from({ length: n }, (_, i) => i);
+export const range = (n: number) => Array.from({ length: n }, (_, i) => i);
 
 // --- Helpers ----------------------------------------------------------------------------
 
-const c = (r: number, g: number, b: number): RGB => [r / 255, g / 255, b / 255];
-const BLACK = c(22, 20, 22);
-const WHITE = c(246, 244, 240);
-const PINK = c(236, 160, 164);
+export const c = (r: number, g: number, b: number): RGB => [r / 255, g / 255, b / 255];
+export const BLACK = c(22, 20, 22);
+export const WHITE = c(246, 244, 240);
+export const PINK = c(236, 160, 164);
 
-const box = (size: Box['size'], at: Box['at'], color: RGB, o: Partial<Box> = {}): Box => ({ size, at, color, ...o });
-const bone = (name: string, pivot: Bone['pivot'], boxes: Box[], children: Bone[] = [], rot?: Bone['rot']): Bone => ({ name, pivot, boxes, children, rot });
-const mirror = (b: Box): Box => ({ ...b, at: [-b.at[0], b.at[1], b.at[2]] });
-const both = (b: Box): Box[] => [b, mirror(b)];
+export const box = (size: Box['size'], at: Box['at'], color: RGB, o: Partial<Box> = {}): Box => ({ size, at, color, ...o });
+export const bone = (name: string, pivot: Bone['pivot'], boxes: Box[], children: Bone[] = [], rot?: Bone['rot']): Bone => ({ name, pivot, boxes, children, rot });
+export const mirror = (b: Box): Box => ({ ...b, at: [-b.at[0], b.at[1], b.at[2]] });
+export const both = (b: Box): Box[] => [b, mirror(b)];
 
 interface QuadSpec {
   legH: number;
@@ -163,13 +169,13 @@ const baby = (l: Look) => (l.flags & MobFlag.BABY) !== 0;
 
 // --- Shared animation pieces --------------------------------------------------------------
 
-function set(pose: Pose, name: string, x: number, y = 0, z = 0): void {
+export function set(pose: Pose, name: string, x: number, y = 0, z = 0): void {
   const p = pose.get(name);
   if (p) p.obj.rotation.set(p.rest[0] + x, p.rest[1] + y, p.rest[2] + z);
 }
 
 /** Moves a bone by (dy, dz) model pixels from where it was built. */
-function lift(pose: Pose, name: string, dy: number, dz = 0): void {
+export function lift(pose: Pose, name: string, dy: number, dz = 0): void {
   const p = pose.get(name);
   if (p) {
     p.obj.position.y = p.base[1] + dy / 16;
@@ -178,7 +184,7 @@ function lift(pose: Pose, name: string, dy: number, dz = 0): void {
 }
 
 /** Diagonal-pair walk (front-left with back-right). */
-function walkLegs(pose: Pose, s: AnimState, amp = 0.75): number {
+export function walkLegs(pose: Pose, s: AnimState, amp = 0.75): number {
   const k = Math.min(1, s.speed / 1.6) * amp;
   const a = Math.sin(s.walk) * k;
   set(pose, 'legFL', a);
@@ -189,7 +195,7 @@ function walkLegs(pose: Pose, s: AnimState, amp = 0.75): number {
 }
 
 /** Head: grazing (down), idle glances, a nod while walking. */
-function headIdle(pose: Pose, s: AnimState, eatDown = 1.0): void {
+export function headIdle(pose: Pose, s: AnimState, eatDown = 1.0): void {
   if (s.anim & MobAnim.EAT) {
     set(pose, 'head', -eatDown + Math.sin(s.t * 14) * 0.08);
     return;
@@ -216,7 +222,7 @@ function sitPose(pose: Pose, drop: number, reach: number): void {
   set(pose, 'head', -pitch);
 }
 
-function resetLifts(pose: Pose): void {
+export function resetLifts(pose: Pose): void {
   for (const p of pose.values()) {
     p.obj.position.y = p.base[1];
     p.obj.position.z = p.base[2];

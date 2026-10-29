@@ -130,6 +130,7 @@ export function isInteractive(id: number, heldId = 0): boolean {
     case B.RUNE_TABLE:
       return true;
     case B.RIFT_STONE:
+    case B.EMBER_ALTAR:
       return heldId === I.LUMEN_DUST;
     case B.SUNWHEAT:
       return heldId === I.SPORE_POWDER;

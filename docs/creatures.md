@@ -26,24 +26,32 @@ Shared systems: per-species rigs and animators (`client/render/mobModels.ts`), s
 (`client/render/MobRenderer.ts`), host AI (`server/mobs/MobManager.ts`), saving by chunk
 (`WorldMeta.creatures`), `mobState` / `ride` / `dismount` messages, synthesized voices.
 
-## Monsters (existing, Cubica's own)
+## Stage B – monster ecosystem (done)
 
-| Creature | Status |
-|---|---|
-| Gloomwalker הולך-אפלה | model + skin, melee, burns in sun, night spawning (most common, groups) |
-| Thornslinger קוצן | model + skin, ranged thorns |
-| Skitterling זחלן | model + skin, climbs walls |
-| Sporecap פטריון | model + skin, spore cloud |
-| Trader סוחר | model + skin, settlements, trades |
+All monsters are Cubica's own designs, each with its own rig (`client/render/monsterModels.ts`), skin,
+animations, sounds, AI (`server/mobs/MobManager.ts`) and spawn zone (`MobDef.zones`).
 
-These still use the older box-list models with generic limb animation; they are not saved (by design).
+| Monster | Role | Look | Behaviour | Weakness | Appears |
+|---|---|---|---|---|---|
+| Gloomwalker הולך-אפלה | ground melee | ragged hooded figure, reaching arms, burning eyes | groups of 2–4, chases from 32 blocks | burns in sunlight | surface/caves at night (most common) |
+| Thornslinger קוצן | ranged | walking cactus bulb with a maw and a flower | keeps 5–10 blocks away, arcing thorns | slow | surface/caves |
+| Skitterling זחלן | fast climber | low eight-legged crawler, 4 red eyes | climbs walls | low health | surface/caves |
+| Sporecap פטריון | area damage | walking toadstool, glowing spots | cap swells, spore cloud (no block damage) | must get close | surface/caves |
+| Duskwing כנף-דמדומים | **flier** | membrane-winged night flier, 2.2-block span | circles above prey, dives, climbs away | torchlight (block light ≥ 9) drives it off; sunlight burns | in the air above the night surface |
+| Mirefin סנפיר-ביצה | **aquatic** | eel with a glowing lure, waving body | bites people in the water | dries out and flops on land | in deep water, day or night |
+| Cragback גב-סלע | **armoured** | mossy stone shell, six stubby legs | slow, hits hard (5); curls up when struck in the face | shell takes 20% from the front; a pickaxe cracks it (×2 from any side) | caves |
+| Shade צל-חלול | **stealth / teleport** | floating hooded wraith, long pale hands, see-through (fades with distance) | blinks to just behind its prey, often blinks away when hit | bright light (≥ 10) keeps it off | surface/caves at night (rare) |
+| Bramblehulk ענק-קוצים | **elite** | 2.7-block giant of rock and roots, glowing core in its back | winds up, then slams the ground (up to 8 damage in 4.5 blocks, big knockback) | ×2 damage from behind (the core); slow | surface at night (rare) |
+| Ember mite קרדית-גחלים | swarm | small glowing beetle | packs of 3–5, leaps at you | 4 health | the Ember Deep |
+| **Matriarch אם-הגחלים** | **boss** (300 health, boss bar) | giant ember beetle queen, glowing seams, mandibles | spits fans of embers; winds up and charges (crashing into a wall stuns her for 4 s); from half health spits more, charges more often, calls mites | ×2.5 damage while stunned — bait her into walls | woken at an **ember altar** (8 ember shards + lumen crystal + 3 ashstone) with lumen dust, in the Ember Deep only; one at a time |
+
+Rewards: dusk membrane (bedroll material), raw fish (cook it; cats eat it), raw iron and rubblestone,
+lumen dust, lumen crystals and iron ingots, ember shards, and the matriarch's heart (furnace fuel that
+burns for 32,000 ticks) with diamonds.
 
 ## Next stages (not started)
 
-- **B – monster ecosystem**: new original monsters per role – flying, aquatic, cave dwellers, armoured,
-  stealth/teleporting, elite and a boss – each with its own rig, skin, animations, AI, attacks, sounds
-  and spawn rules; move the existing monsters onto species rigs.
-- **C – water and air life**: fish and other swimmers (needs swimming AI), birds/bats (needs flying AI).
+- **C – more life**: passive fish and squid-like swimmers, birds and bats, more pets/mounts; leads and name tags.
 
 ## Known limits
 

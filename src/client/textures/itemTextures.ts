@@ -144,6 +144,17 @@ function drumstick(c: RGB): Pixmap {
   return p;
 }
 
+function fish(body: RGB, belly: RGB): Pixmap {
+  const p = blank();
+  for (let y = 4; y < 13; y++) for (let x = 2; x < 12; x++) {
+    const d = Math.hypot((x - 7) / 5, (y - 8.5) / 3.6);
+    if (d <= 1) p.set(x, y, y > 9 ? belly : shade(body, 0.85 + (1 - d) * 0.3));
+  }
+  for (let t = 0; t < 4; t++) { p.set(12 + t, 8 - t, body); p.set(12 + t, 9 + t, body); p.set(12, 8, body); p.set(12, 9, body); }
+  p.set(4, 7, [20, 20, 24]);
+  return p;
+}
+
 function bucket(fill: RGB | null): Pixmap {
   const p = blank();
   for (let y = 5; y < 15; y++) {
@@ -238,6 +249,28 @@ const PAINTERS: Record<number, () => Pixmap> = {
       p.set(12 - t, 12 - t, shade([214, 216, 222], 0.95));
     }
     for (const [cx, cy] of [[3, 13], [12, 13]]) for (let y = -1; y <= 1; y++) for (let x = -1; x <= 1; x++) if (x || y) p.set(cx + x, cy + y, [176, 60, 50]);
+    return p;
+  },
+  [I.RAW_FISH]: () => fish([120, 150, 170], [200, 210, 220]),
+  [I.COOKED_FISH]: () => fish([190, 130, 70], [230, 190, 130]),
+  [I.DUSK_MEMBRANE]: () => {
+    const p = blank();
+    for (let y = 3; y < 13; y++) for (let x = 1; x < 15; x++) {
+      const edge = Math.abs(x - 7.5) / 7 + (y - 3) / 14;
+      if (edge > 1.05 || (y > 9 && (x % 4 === 0))) continue;
+      p.set(x, y, shade([110, 84, 132], 0.85 + ((x * 3 + y) % 4) * 0.05 - (x % 4 === 2 ? 0.15 : 0)));
+    }
+    return p;
+  },
+  [I.MATRIARCH_HEART]: () => {
+    const p = blank();
+    for (let y = 2; y < 15; y++) for (let x = 1; x < 15; x++) {
+      const dx = Math.abs(x - 7.5);
+      const inHeart = y < 7 ? Math.hypot(dx - 3, y - 5.5) < 3.4 : dx < (14.5 - y) * 0.95;
+      if (!inHeart) continue;
+      const core = Math.hypot(x - 7.5, y - 7) < 2.6;
+      p.set(x, y, core ? [255, 230, 140] : shade([230, 90, 30], 0.8 + ((x + y) % 3) * 0.1));
+    }
     return p;
   },
   [I.BUCKET]: () => bucket(null),

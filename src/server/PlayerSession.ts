@@ -67,6 +67,8 @@ export class PlayerSession {
   swingUntil = 0;
   /** The creature this player sits on. */
   riding: number | null = null;
+  /** The boss whose bar this player sees, and the health last sent. */
+  bossBar: { id: number; health: number } | null = null;
   /** Times of recent chat messages (rate limit). */
   chatTimes: number[] = [];
   /** Last message received from this client (ms). */

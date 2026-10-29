@@ -3,119 +3,16 @@ import { BABY_SCALE, Mob, MobAnim, MobFlag, mobDef } from '../../shared/entities
 import type { EntityInfo, MobEventName } from '../../shared/protocol/messages';
 import { hash01, mulberry32 } from '../../shared/rng';
 import type { ClientWorld } from '../ClientWorld';
-import { SPECIES, type AnimState, type Bone, type Box, type Detail, type Pose, type RGB, type Rig } from './mobModels';
+import { type AnimState, type Bone, type Box, type Detail, type Pose, type RGB, type Rig } from './mobModels';
+import { CREATURES } from './monsterModels';
 
-// Creatures as articulated box models. Animals come from species rigs (mobModels.ts: own proportions,
-// features, variants, baby forms and animations); monsters and traders from role-tagged box lists.
+// Creatures as articulated box models: every kind has its own rig and animator (mobModels.ts for
+// animals, monsterModels.ts for monsters and traders).
 // Every box gets a pixel-art skin painted from its colour, a pattern and pixel details, one texel per
 // model pixel; the skins of a model share one canvas atlas, built once per kind/look and shared.
 
-type Role = 'legA' | 'legB' | 'arm' | 'cap';
-
-interface Part extends Box {
-  role?: Role;
-}
-
 const PX = 1 / 16;
 const THORN_GRAVITY = 6;
-
-const legs = (w: number, h: number, x: number, z: number, color: RGB, extra: Partial<Part> = {}): Part[] => [
-  { size: [w, h, w], at: [-x, h / 2, -z], color, role: 'legA', ...extra },
-  { size: [w, h, w], at: [x, h / 2, z], color, role: 'legA', ...extra },
-  { size: [w, h, w], at: [x, h / 2, -z], color, role: 'legB', ...extra },
-  { size: [w, h, w], at: [-x, h / 2, z], color, role: 'legB', ...extra },
-];
-const eyes = (x: number, y: number, z: number, color: RGB = [0.05, 0.05, 0.05], glow = false, w = 1, h = 1): Part[] => [
-  { size: [w, h, 0.3], at: [-x, y, z], color, glow, pattern: 'plain' },
-  { size: [w, h, 0.3], at: [x, y, z], color, glow, pattern: 'plain' },
-];
-const pair = (p: Part): Part[] => [p, { ...p, at: [-p.at[0], p.at[1], p.at[2]] }];
-
-/** Placeholder colour replaced by the trader's profession colour. */
-const ROBE: RGB = [-1, -1, -1];
-const ROBE_COLORS: RGB[] = [[0.35, 0.55, 0.25], [0.45, 0.33, 0.24], [0.42, 0.26, 0.6]];
-const SKIN: RGB = [0.85, 0.68, 0.52];
-
-/** Monsters and traders: boxes with limb roles, animated by the generic animator. */
-const MODELS: Record<number, Part[]> = {
-  [Mob.TRADER]: [
-    { size: [8, 20, 6], at: [0, 10, 0], color: ROBE, pattern: 'cloth', band: { rows: 2, color: [0.2, 0.15, 0.1] } },
-    { size: [8.4, 1.5, 6.4], at: [0, 12, 0], color: [0.36, 0.24, 0.14], pattern: 'plain' },
-    { size: [2, 2, 0.6], at: [0, 12, -3.4], color: [0.85, 0.72, 0.3], pattern: 'plain' },
-    ...pair({ size: [3, 11, 3], at: [-5.5, 15.5, 0], color: ROBE, pattern: 'cloth', band: { rows: 2, color: SKIN } }),
-    { size: [8, 8, 8], at: [0, 24, 0], color: SKIN, pattern: 'plain' },
-    ...eyes(1.8, 25, -4.1),
-    { size: [6, 1, 0.3], at: [0, 26.5, -4.1], color: [0.36, 0.24, 0.16], pattern: 'plain' },
-    { size: [2, 3, 1], at: [0, 23, -4.4], color: [0.75, 0.56, 0.42], pattern: 'plain' },
-    { size: [11, 1, 11], at: [0, 28.5, 0], color: [0.3, 0.22, 0.14], pattern: 'cloth' },
-    { size: [7, 3, 7], at: [0, 30.5, 0], color: [0.3, 0.22, 0.14], pattern: 'cloth', band: { rows: 1, color: ROBE } },
-  ],
-  [Mob.GLOOMWALKER]: [
-    { size: [4, 12, 4], at: [-2, 6, 0], color: [0.22, 0.19, 0.27], role: 'legA', pattern: 'rags', band: { rows: 2, color: [0.1, 0.09, 0.12] } },
-    { size: [4, 12, 4], at: [2, 6, 0], color: [0.22, 0.19, 0.27], role: 'legB', pattern: 'rags', band: { rows: 2, color: [0.1, 0.09, 0.12] } },
-    { size: [8, 12, 4], at: [0, 18, 0], color: [0.3, 0.26, 0.36], pattern: 'rags' },
-    { size: [8.4, 1, 4.4], at: [0, 13, 0], color: [0.17, 0.14, 0.2], pattern: 'plain' },
-    { size: [3, 15, 3], at: [-5.5, 17, 0], color: [0.27, 0.23, 0.32], role: 'arm', pattern: 'rags', band: { rows: 3, color: [0.36, 0.42, 0.4] } },
-    { size: [3, 15, 3], at: [5.5, 17, 0], color: [0.27, 0.23, 0.32], role: 'arm', pattern: 'rags', band: { rows: 3, color: [0.36, 0.42, 0.4] } },
-    { size: [8, 8, 8], at: [0, 28, -0.5], color: [0.36, 0.42, 0.4], top: [0.16, 0.13, 0.2], pattern: 'fur' },
-    { size: [9, 3, 9], at: [0, 31.5, 0], color: [0.16, 0.13, 0.2], pattern: 'rags' },
-    { size: [9, 6, 2], at: [0, 28, 3.5], color: [0.16, 0.13, 0.2], pattern: 'rags' },
-    ...eyes(2, 29, -4.6, [1, 0.85, 0.3], true, 2, 1),
-    { size: [4, 1, 0.3], at: [0, 26, -4.6], color: [0.12, 0.1, 0.12], pattern: 'plain' },
-  ],
-  [Mob.THORNSLINGER]: [
-    { size: [12, 12, 12], at: [0, 9, 0], color: [0.3, 0.55, 0.25], pattern: 'ribs' },
-    { size: [10, 2, 10], at: [0, 16, 0], color: [0.2, 0.42, 0.18], pattern: 'ribs' },
-    { size: [4, 2, 4], at: [0, 18, 0], color: [0.9, 0.4, 0.55], pattern: 'spots', spot: [1, 0.85, 0.4] },
-    { size: [6, 3, 0.4], at: [0, 9, -6.1], color: [0.45, 0.08, 0.1], pattern: 'plain' },
-    ...eyes(2.5, 12.5, -6.1, [0.95, 0.9, 0.3], true),
-    { size: [1, 1, 3], at: [-6.5, 11, 0], color: [0.92, 0.88, 0.6], pattern: 'plain' },
-    { size: [1, 1, 3], at: [6.5, 7, 2], color: [0.92, 0.88, 0.6], pattern: 'plain' },
-    { size: [3, 1, 1], at: [-3, 15.5, 5], color: [0.92, 0.88, 0.6], pattern: 'plain' },
-    { size: [1, 3, 1], at: [3, 6, 6.5], color: [0.92, 0.88, 0.6], pattern: 'plain' },
-    { size: [1, 1, 3], at: [6.5, 12, -3], color: [0.92, 0.88, 0.6], pattern: 'plain' },
-    ...legs(2, 3, 3, 3, [0.42, 0.3, 0.18], { pattern: 'fur' }),
-  ],
-  [Mob.SKITTERLING]: [
-    { size: [10, 5, 12], at: [0, 6, 1], color: [0.14, 0.3, 0.3], pattern: 'chitin' },
-    { size: [8, 4, 6], at: [0, 6.5, 9], color: [0.12, 0.26, 0.27], pattern: 'spots', spot: [0.5, 0.15, 0.15] },
-    { size: [6, 4, 5], at: [0, 6, -7.5], color: [0.12, 0.25, 0.26], pattern: 'chitin' },
-    ...pair({ size: [1, 1, 2], at: [-1.5, 4, -10.5], color: [0.08, 0.14, 0.14], pattern: 'plain' }),
-    ...eyes(1.2, 7, -10.1, [1, 0.2, 0.2], true),
-    ...eyes(2.6, 6.2, -10.1, [1, 0.2, 0.2], true),
-    ...[-4, -1.5, 1.5, 4].flatMap((z, i): Part[] => [
-      { size: [8, 1, 1], at: [-8, 4, z], color: [0.1, 0.2, 0.2], role: i % 2 ? 'legA' : 'legB', pattern: 'chitin' },
-      { size: [8, 1, 1], at: [8, 4, z], color: [0.1, 0.2, 0.2], role: i % 2 ? 'legB' : 'legA', pattern: 'chitin' },
-    ]),
-  ],
-  [Mob.SPORECAP]: [
-    { size: [2, 2, 3], at: [-2, 1, 0], color: [0.75, 0.7, 0.58], role: 'legA' },
-    { size: [2, 2, 3], at: [2, 1, 0], color: [0.75, 0.7, 0.58], role: 'legB' },
-    { size: [6, 10, 6], at: [0, 6, 0], color: [0.86, 0.8, 0.68], pattern: 'ribs' },
-    { size: [8, 1, 8], at: [0, 10.5, 0], color: [0.78, 0.7, 0.6], pattern: 'ribs' },
-    ...eyes(1.5, 8, -3.1, [0.05, 0.05, 0.05], false, 1, 2),
-    { size: [14, 5, 14], at: [0, 13.5, 0], color: [0.45, 0.22, 0.56], role: 'cap', pattern: 'spots', spot: [0.8, 0.7, 0.86] },
-    { size: [10, 2, 10], at: [0, 17, 0], color: [0.5, 0.26, 0.6], role: 'cap', pattern: 'spots', spot: [0.8, 0.7, 0.86] },
-    { size: [2, 0.6, 2], at: [-3, 18.2, -2], color: [0.4, 1, 0.9], glow: true, role: 'cap', pattern: 'plain' },
-    { size: [2, 0.6, 2], at: [3, 18.2, 2], color: [0.4, 1, 0.9], glow: true, role: 'cap', pattern: 'plain' },
-    { size: [0.6, 2, 2], at: [-7.2, 14, 3], color: [0.4, 1, 0.9], glow: true, role: 'cap', pattern: 'plain' },
-    { size: [0.6, 2, 2], at: [7.2, 14, -3], color: [0.4, 1, 0.9], glow: true, role: 'cap', pattern: 'plain' },
-  ],
-};
-
-
-/** A monster's box list as a rig: limbs become bones that swing from their top. */
-function partsRig(parts: Part[]): Rig {
-  const root: Bone = { name: 'root', pivot: [0, 0, 0], boxes: [], children: [] };
-  const caps: Box[] = [];
-  parts.forEach((p, i) => {
-    if (p.role === 'cap') caps.push(p);
-    else if (p.role) root.children!.push({ name: `${p.role}${i}`, role: p.role, pivot: [p.at[0], p.at[1] + p.size[1] / 2, p.at[2]], boxes: [p] });
-    else root.boxes.push(p);
-  });
-  if (caps.length) root.children!.push({ name: 'cap', role: 'cap', pivot: [0, caps[0].at[1], 0], boxes: caps });
-  return { bones: [root], scale: 1 };
-}
 
 // --- Skins ---------------------------------------------------------------------------------
 
@@ -286,7 +183,6 @@ interface MobView {
   root: THREE.Group;
   model: THREE.Group;
   pose: Pose;
-  roles: Array<{ obj: THREE.Object3D; role: Role }>;
   material: THREE.MeshBasicMaterial;
   x: number;
   y: number;
@@ -302,6 +198,10 @@ interface MobView {
   seed: number;
   hurt: number;
   dying: number;
+  /** Seconds since its last ground slam. */
+  slam: number;
+  /** Jump straight to the next position (it blinked) instead of gliding there. */
+  snap: boolean;
 }
 
 interface ThornView {
@@ -326,6 +226,12 @@ const PUFFS: Partial<Record<MobEventName, { color: number; count: number; size: 
   smoke: { color: 0x9a9a9a, count: 14, size: 0.2, rise: 0.6, grow: 1.2, life: 1.0 },
   spores: { color: 0x73e6b3, count: 160, size: 0.22, rise: 0, grow: 2.5, life: 1.4 },
   shear: { color: 0xf2f0e8, count: 10, size: 0.14, rise: -0.6, grow: 0.8, life: 0.8 },
+  clang: { color: 0xe8e8f0, count: 8, size: 0.1, rise: 0.4, grow: 1.4, life: 0.4 },
+  crit: { color: 0xffd040, count: 10, size: 0.14, rise: 0.6, grow: 1.2, life: 0.6 },
+  blink: { color: 0x3a2a5a, count: 26, size: 0.2, rise: 0.4, grow: 1.4, life: 0.9 },
+  slam: { color: 0x7a6a50, count: 70, size: 0.3, rise: 0.3, grow: 4, life: 1.0 },
+  stun: { color: 0xfff080, count: 10, size: 0.18, rise: 0.8, grow: 1, life: 1.4 },
+  roar: { color: 0xff8030, count: 40, size: 0.2, rise: 1.2, grow: 2.5, life: 1.2 },
 };
 
 /** Renders creatures, thorns and particles; also answers "which creature is the crosshair on". */
@@ -335,6 +241,8 @@ export class MobRenderer {
   private readonly puffs: Puff[] = [];
   private readonly thornMaterial = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.85, 0.82, 0.45) });
   private readonly thornGeometry = new THREE.BoxGeometry(1 * PX, 1 * PX, 6 * PX);
+  private readonly emberMaterial = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.55, 0.15) });
+  private readonly emberGeometry = new THREE.BoxGeometry(4 * PX, 4 * PX, 4 * PX);
   /** Skins and geometries per kind/look, shared by every creature that looks the same. */
   private readonly kits = new Map<string, Kit>();
   private readonly ray = new THREE.Ray();
@@ -352,23 +260,16 @@ export class MobRenderer {
   }
 
   private lookKey(kind: number, variant: number, flags: number): string {
-    return `${kind}:${variant}:${flags & (SPECIES[kind]?.lookFlags ?? 0)}`;
+    return `${kind}:${variant}:${flags & (CREATURES[kind]?.lookFlags ?? 0)}`;
   }
 
   private kit(kind: number, variant: number, flags: number): Kit | null {
     const key = this.lookKey(kind, variant, flags);
     let kit = this.kits.get(key);
     if (!kit) {
-      const species = SPECIES[kind];
-      let rig: Rig;
-      if (species) rig = species.build({ variant, flags });
-      else {
-        const parts = MODELS[kind];
-        if (!parts) return null;
-        const robe = ROBE_COLORS[variant] ?? ROBE_COLORS[0];
-        const fill = (c: RGB): RGB => (c === ROBE ? robe : c);
-        rig = partsRig(parts.map((p) => ({ ...p, color: fill(p.color), band: p.band && { ...p.band, color: fill(p.band.color) } })));
-      }
+      const species = CREATURES[kind];
+      if (!species) return null;
+      const rig: Rig = species.build({ variant, flags });
       kit = buildKit(rig, kind * 7 + variant);
       this.kits.set(key, kit);
     }
@@ -380,7 +281,6 @@ export class MobRenderer {
     const kit = this.kit(view.kind, view.variant, view.flags);
     view.model.clear();
     view.pose = new Map();
-    view.roles = [];
     view.lookKey = this.lookKey(view.kind, view.variant, view.flags);
     if (!kit) return;
     let i = 0;
@@ -396,7 +296,6 @@ export class MobRenderer {
       }
       parent.add(g);
       view.pose.set(b.name, { obj: g, rest, base: [g.position.x, g.position.y, g.position.z] });
-      if (b.role) view.roles.push({ obj: g, role: b.role });
       for (const ch of b.children ?? []) add(ch, g, b.pivot);
     };
     for (const b of kit.rig.bones) add(b, view.model, [0, 0, 0]);
@@ -407,22 +306,23 @@ export class MobRenderer {
   spawn(e: EntityInfo): void {
     if (e.kind === 'projectile') {
       this.remove(e.id);
-      const mesh = new THREE.Mesh(this.thornGeometry, this.thornMaterial);
+      const mesh = e.style === 1 ? new THREE.Mesh(this.emberGeometry, this.emberMaterial) : new THREE.Mesh(this.thornGeometry, this.thornMaterial);
       this.scene.add(mesh);
       this.thorns.set(e.id, { mesh, p0: new THREE.Vector3(e.x, e.y, e.z), v: new THREE.Vector3(e.vx, e.vy, e.vz), t: 0 });
       return;
     }
     if (e.kind !== 'mob') return;
     this.remove(e.id);
-    if (!SPECIES[e.mob] && !MODELS[e.mob]) return;
+    if (!CREATURES[e.mob]) return;
     const root = new THREE.Group();
     const model = new THREE.Group();
     root.add(model);
+    const ghost = e.mob === Mob.SHADE;
     const view: MobView = {
-      kind: e.mob, variant: e.variant ?? 0, flags: e.flags ?? 0, lookKey: '', root, model, pose: new Map(), roles: [],
-      material: new THREE.MeshBasicMaterial({ vertexColors: true }),
+      kind: e.mob, variant: e.variant ?? 0, flags: e.flags ?? 0, lookKey: '', root, model, pose: new Map(),
+      material: new THREE.MeshBasicMaterial({ vertexColors: true, transparent: ghost, depthWrite: !ghost }),
       x: e.x, y: e.y, z: e.z, yaw: e.yaw, tx: e.x, ty: e.y, tz: e.z, tyaw: e.yaw, anim: 0, walk: Math.random() * 6, vy: 0,
-      seed: Math.random(), hurt: 0, dying: 0,
+      seed: Math.random(), hurt: 0, dying: 0, slam: Infinity, snap: false,
     };
     this.dress(view);
     root.position.set(e.x, e.y, e.z);
@@ -449,6 +349,13 @@ export class MobRenderer {
       m.tz = data[i + 3];
       m.tyaw = data[i + 4];
       m.anim = data[i + 5];
+      if (m.snap) {
+        m.x = m.tx;
+        m.y = m.ty;
+        m.z = m.tz;
+        m.yaw = m.tyaw;
+        m.snap = false;
+      }
     }
   }
 
@@ -461,6 +368,8 @@ export class MobRenderer {
     if (!m) return;
     if (event === 'hurt') m.hurt = 0.35;
     else if (event === 'death') m.dying = 0.001;
+    else if (event === 'slam') m.slam = 0;
+    else if (event === 'blink') m.snap = true;
     const puff = PUFFS[event];
     if (puff) this.puff(m.x, m.y + (event === 'spores' ? 0.8 : 1), m.z, puff);
   }
@@ -541,7 +450,8 @@ export class MobRenderer {
     return best;
   }
 
-  update(dt: number, daylight: number): void {
+  /** `viewer`: the camera position (shades fade with distance from it). */
+  update(dt: number, daylight: number, viewer?: { x: number; y: number; z: number }): void {
     const k = Math.min(1, dt * 10);
     const now = performance.now() / 1000;
     for (const [id, m] of this.mobs) {
@@ -571,20 +481,13 @@ export class MobRenderer {
       if (forced) m.vy = forced.vy;
       const babyStep = m.flags & MobFlag.BABY ? 1.5 : 1;
       m.walk += dt * Math.min(speed, 10) * 3 * babyStep;
-      const species = SPECIES[m.kind];
-      if (species) {
-        const s: AnimState = { t: now, dt, walk: m.walk, speed, vy: m.vy, anim: m.anim, flags: m.flags, seed: m.seed };
-        species.animate(m.pose, s);
-      } else {
-        const swing = Math.sin(m.walk) * Math.min(1, speed / 2) * 0.7;
-        const attacking = (m.anim & MobAnim.ATTACK) !== 0;
-        const fuse = (m.anim & MobAnim.FUSE) !== 0;
-        for (const p of m.roles) {
-          if (p.role === 'legA') p.obj.rotation.x = swing;
-          else if (p.role === 'legB') p.obj.rotation.x = -swing;
-          else if (p.role === 'arm') p.obj.rotation.x = -1.35 + (attacking ? Math.sin(performance.now() / 60) * 0.4 : swing * 0.2);
-          else if (p.role === 'cap') p.obj.scale.setScalar(fuse ? 1 + Math.abs(Math.sin(performance.now() / 90)) * 0.15 : 1);
-        }
+      m.slam += dt;
+      const s: AnimState = { t: now, dt, walk: m.walk, speed, vy: m.vy, anim: m.anim, flags: m.flags, seed: m.seed, slam: m.slam };
+      CREATURES[m.kind]?.animate(m.pose, s);
+      if (m.kind === Mob.SHADE) {
+        // Nearly invisible from afar, clearer up close, flickering.
+        const d = viewer ? Math.hypot(viewer.x - m.x, viewer.y - m.y - 1, viewer.z - m.z) : 8;
+        m.material.opacity = Math.min(0.9, Math.max(0.08, 1.1 - d / 7)) * (0.85 + Math.sin(now * 13 + m.seed * 40) * 0.15);
       }
 
       if (m.dying > 0) {
@@ -636,8 +539,8 @@ export class MobRenderer {
     this.kits.clear();
     this.thornMaterial.dispose();
     this.thornGeometry.dispose();
+    this.emberMaterial.dispose();
+    this.emberGeometry.dispose();
   }
 }
 
-/** For the creature gallery: a rig's skins + geometries, without a renderer. */
-export { buildKit as buildCreatureKit, partsRig, MODELS as MONSTER_MODELS, ROBE, ROBE_COLORS };

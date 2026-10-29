@@ -5,7 +5,7 @@ import { buildChunkMesh, PAD, paddedIndex } from '../shared/mesh/mesher';
 import { buildBlockTextures } from '../client/textures/atlas';
 import { createChunkMaterials, createChunkUniforms } from '../client/render/chunkMaterial';
 import { MobRenderer } from '../client/render/MobRenderer';
-import { SPECIES } from '../client/render/mobModels';
+import { CREATURES as SPECIES } from '../client/render/monsterModels';
 import type { ClientWorld } from '../client/ClientWorld';
 
 // Development-only creature gallery (http://localhost:5173/gallery.html; not part of the build):
@@ -81,6 +81,12 @@ function variantsOf(kind: number): number[] {
   return SPECIES[kind]?.variants ?? (kind === 20 ? [0, 1, 2] : [0]);
 }
 
+/** Fliers hover and swimmers float a little above the floor. */
+function hoverOf(kind: number): number {
+  const d = mobDef(kind)!;
+  return d.flier ? 1.5 : d.swimmer ? 0.5 : 0;
+}
+
 function respawn(): void {
   for (const id of ids) {
     mobs.remove(id);
@@ -95,7 +101,8 @@ function respawn(): void {
   list.forEach((e, i) => {
     const id = i + 1;
     const x = (i - (list.length - 1) / 2) * spacing;
-    mobs.spawn({ id, kind: 'mob', mob: e.kind, x, y: 1, z: 0, yaw: 0, variant: e.variant, flags: state.flags });
+    const y = 1 + hoverOf(e.kind);
+    mobs.spawn({ id, kind: 'mob', mob: e.kind, x, y, z: 0, yaw: 0, variant: e.variant, flags: state.flags });
     ids.push(id);
   });
   applyAnim();
@@ -119,7 +126,7 @@ function updateInfo(): void {
   const s = state.flags & MobFlag.BABY ? BABY_SCALE : 1;
   const species = SPECIES[state.kind];
   hitFrame.scale.set(d.width * s, d.height * s, d.width * s);
-  hitFrame.position.set(0, (d.height * s) / 2 + 1, 0);
+  hitFrame.position.set(0, (d.height * s) / 2 + 1 + hoverOf(state.kind), 0);
   hitFrame.visible = state.mode === 'one';
   playerFrame.position.set(state.mode === 'one' ? -Math.max(1.2, d.width) : -((ids.length - 1) / 2) * 1.8 - 1.4, 1.9, 0);
   document.getElementById('info')!.textContent = [
@@ -139,8 +146,8 @@ function frameCamera(): void {
   const dist = one ? size * 2.3 + 1.4 : size;
   const yaw = VIEWS[state.view].yaw + state.orbit;
   // The creatures face -z, so "front" looks at them from -z.
-  camera.position.set(-Math.sin(yaw) * dist, one ? 1 + size * 0.55 : 2.6, -Math.cos(yaw) * dist);
-  camera.lookAt(0, one ? 1 + Math.min(size, d.height) * 0.45 : 1.4, 0);
+  camera.position.set(-Math.sin(yaw) * dist, one ? 1 + hoverOf(state.kind) + size * 0.55 : 2.6, -Math.cos(yaw) * dist);
+  camera.lookAt(0, one ? 1 + hoverOf(state.kind) + Math.min(size, d.height) * 0.45 : 1.4, 0);
   // The player frame stands beside the creature, as seen from this view.
   if (state.mode === 'one') {
     const off = Math.max(1.1, d.width * 0.9 + 0.6);
@@ -200,7 +207,7 @@ let last = performance.now();
 function frame(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  mobs.update(dt, 1);
+  mobs.update(dt, 1, camera.position);
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -208,4 +215,4 @@ renderUi();
 respawn();
 requestAnimationFrame(frame);
 // Hidden panes stop requestAnimationFrame; tests can step frames by hand.
-(window as unknown as { gallery: unknown }).gallery = { state, respawn, applyAnim, frameCamera, renderUi, step: (dt = 0.05) => { mobs.update(dt, 1); renderer.render(scene, camera); } };
+(window as unknown as { gallery: unknown }).gallery = { state, respawn, applyAnim, frameCamera, renderUi, step: (dt = 0.05) => { mobs.update(dt, 1, camera.position); renderer.render(scene, camera); } };

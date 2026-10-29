@@ -214,7 +214,19 @@ from client-reported positions (bounded by the speed check).
 - Dev gallery: `gallery.html` (dev server only, not built): every creature, variant, flags, animation,
   front/side/back/quarter views, player-size frame and hit box. Host commands: `/summon <kind> [baby]
   [variant] [count]`, `/mobinfo` (nearest creature's state), `/grow` (nearby babies grow, cooldowns end).
-- Monsters:
+- Monsters (stage B; full table in `docs/creatures.md`): every one has a rig in
+  `client/render/monsterModels.ts` (`CREATURES` = animals + monsters; a test fails if a kind lacks a
+  model, animator, drops or a way to appear). `MobDef.zones` ('surface' | 'cave' | 'deep' | 'water' |
+  'air', `monstersFor`) pick who spawns where: zone = deep if `isDeep(x)`, cave if the floor's sky light
+  < 8, else surface (15% of surface attempts put a flier 7–10 blocks up in the air instead); water
+  monsters have their own cap (4 per player) and spawn under deep water any time. Moves: `flier`
+  (PlayerBody `hover` + `flySpeed`, steered in 3D by `steer3d`), `swimmer` (PlayerBody `swimmer`),
+  `frontArmor` (shell: ×0.2 from the front and curls up = `stun`; a pickaxe ×2), `backWeakness`, `heavy`
+  (barely knocked back), `fearsLight` (block light level it avoids), `boss`. New anim bits WINDUP, STUN,
+  DASH; events clang, crit, blink (client snaps the position), slam, stun, roar. Thorns are now
+  projectiles with a style (1 = ember, 4 damage). The matriarch: `GameServer.wakeMatriarch` (ember altar
+  + lumen dust, Ember Deep only, one at a time), `bossBar` messages to players within 64 blocks,
+  phase 2 at half health, never despawns. Host command `/summon <kind>` works for all of them.
   - Hostile: Gloomwalker הולך-אפלה (melee 3, burns in direct sunlight, drops gloom ash = fuel),
     Thornslinger קוצן (keeps 5–10 blocks away, shoots arcing thorns, drops sticks), Skitterling זחלן
     (fast, climbs walls, drops silk), Sporecap פטריון (puffs for 1.5 s, then a spore cloud: up to 7

@@ -741,3 +741,18 @@ body {
   color: #8be08b;
   opacity: 1;
 }
+
+.boss-bar {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, 70vw);
+  text-align: center;
+  color: #ffd9b0;
+  font-weight: 700;
+  text-shadow: 0 2px 0 #000;
+}
+.boss-bar span { display: block; margin-bottom: 4px; }
+.boss-bar > div { height: 10px; background: rgba(0, 0, 0, 0.6); border: 2px solid #2a1208; }
+.boss-bar > div > div { height: 100%; background: linear-gradient(#ff9a3c, #c0400c); transition: width 0.25s; }

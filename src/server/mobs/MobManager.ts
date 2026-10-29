@@ -1,8 +1,9 @@
 import { B, OPAQUE } from '../../shared/blocks/registry';
 import {
-  animalsFor, BABY_SCALE, BREED_COOLDOWN, GROW_TICKS, HOSTILE_MOBS, LOVE_TICKS, Mob, MOB_ATTACK_TICKS, MOB_REACH, MobAnim, MobFlag,
-  mobDef, pickSpawnKind, SAVED_FLAGS, SPORE_DAMAGE, SPORE_FUSE_TICKS, SPORE_RADIUS, type MobDef, type SavedMob,
+  animalsFor, BABY_SCALE, BREED_COOLDOWN, EMBER_DAMAGE, GROW_TICKS, LOVE_TICKS, Mob, MOB_ATTACK_TICKS, MOB_REACH, MobAnim, MobFlag,
+  mobDef, monstersFor, pickSpawnKind, SAVED_FLAGS, SPORE_DAMAGE, SPORE_FUSE_TICKS, SPORE_RADIUS, type MobDef, type SavedMob, type Zone,
 } from '../../shared/entities/mobs';
+import { isDeep } from '../../shared/world/dimensions';
 import { I, type ItemStack } from '../../shared/items/registry';
 import { PlayerBody, type MoveInput, type WorldQuery } from '../../shared/physics/PlayerBody';
 import { raycast } from '../../shared/physics/raycast';
@@ -36,6 +37,11 @@ const ANIMAL_AREA = 48;
 const ANIMALS_MAX = 250;
 const THORN_SPEED = 16;
 const THORN_GRAVITY = 6;
+const EMBER_SPEED = 12;
+/** Water monsters: a cap of their own (per player), so lakes don't eat the night's quota. */
+const WATER_PER_PLAYER = 4;
+/** Elite slam: radius and damage at the centre. */
+const SLAM_RADIUS = 4.5;
 /** Pets: walk after their owner beyond this, jump to them beyond that. */
 const FOLLOW_START = 6;
 const FOLLOW_TELEPORT = 14;
@@ -53,6 +59,8 @@ export interface MobTarget {
   readonly sneaking: boolean;
   /** Item id in hand (animals follow their food). */
   readonly held: number;
+  readonly yaw: number;
+  readonly inWater: boolean;
   /** Deals damage from a creature; `from` is where it came from (for knockback). */
   hurt(amount: number, cause: string, from: readonly number[], push?: number): void;
 }
@@ -119,10 +127,28 @@ export interface MobEntity {
   angerTicks: number;
   angryPlayer: number | null;
   angryMob: number | null;
+  /** Monster moves: what it is doing (flier: circle/dive/climb…), a timer, and its winding up / stun / dash. */
+  mode: string;
+  modeTicks: number;
+  windup: number;
+  stun: number;
+  dash: number;
+  dashDir: [number, number];
+  /** Boss / special attack timers. */
+  timers: [number, number, number];
+  phase: number;
+  /** Ticks out of water (swimmers). */
+  dry: number;
+  /** Players already hit by the current dash. */
+  dashHits: Set<number>;
 }
 
 interface Thorn {
   id: number;
+  /** 0 thorn, 1 ember (the matriarch's). */
+  style: number;
+  damage: number;
+  gravity: number;
   x: number;
   y: number;
   z: number;
@@ -132,7 +158,8 @@ interface Thorn {
   age: number;
 }
 
-export type MobEventKind = 'hurt' | 'death' | 'spores' | 'love' | 'tamed' | 'smoke' | 'baby' | 'shear' | 'ram';
+export type MobEventKind = 'hurt' | 'death' | 'spores' | 'love' | 'tamed' | 'smoke' | 'baby' | 'shear' | 'ram'
+  | 'clang' | 'crit' | 'blink' | 'slam' | 'stun' | 'roar';
 
 export interface MobEvents {
   spawned(info: EntityInfo): void;
@@ -194,6 +221,11 @@ export class MobManager {
     body.climber = !!def.climber;
     body.slowFall = !!def.slowFall;
     if (kind === Mob.GOAT) body.jumpVelocity = 10.5;
+    if (def.flier) {
+      body.flying = body.hover = true;
+      body.flySpeed = def.speed;
+    }
+    body.swimmer = !!def.swimmer;
     const variant = extra.variant ?? def.variant?.(this.biomeAt(x, z), Math.random);
     const m: MobEntity = {
       id: this.nextId(), def, body, yaw: Math.random() * Math.PI * 2, health: def.health, hurtTicks: 0, deadTicks: 0,
@@ -202,7 +234,8 @@ export class MobManager {
       variant, home: extra.home, flags: (extra.flags ?? 0) | (extra.baby ? MobFlag.BABY : 0), age: 0, love: 0, breedCooldown: 0,
       owner: null, ownerName: null, eggTimer: 6000 + Math.floor(Math.random() * 6000), temper: 0, riderId: null, rideTicks: 0,
       ramCooldown: 600 + Math.floor(Math.random() * 1800), ramTicks: 0, ramDir: [0, 0], actionTicks: 0, angerTicks: 0,
-      angryPlayer: null, angryMob: null,
+      angryPlayer: null, angryMob: null, mode: '', modeTicks: 0, windup: 0, stun: 0, dash: 0, dashDir: [0, 0],
+      timers: [60, 120, 300], phase: 1, dry: 0, dashHits: new Set(),
     };
     this.applySize(m);
     this.mobs.set(m.id, m);
@@ -315,16 +348,34 @@ export class MobManager {
    * Something hit a creature (`by`: the attacking player or creature, if any). Returns false if it
    * could not be hurt right now.
    */
-  hit(mobId: number, damage: number, from: readonly number[], by?: { player?: number; playerKey?: string; mob?: number }): boolean {
+  hit(mobId: number, damage: number, from: readonly number[], by?: { player?: number; playerKey?: string; mob?: number; tool?: string }): boolean {
     const m = this.mobs.get(mobId);
     if (!m || m.deadTicks > 0 || m.hurtTicks > 0) return false;
-    m.health -= damage;
-    m.hurtTicks = HURT_TICKS;
     const dx = m.body.x - from[0];
     const dz = m.body.z - from[2];
     const len = Math.hypot(dx, dz) || 1;
-    if (m.riderId === null) m.body.push((dx / len) * 6, 5, (dz / len) * 6);
+    // Which side was hit: +1 straight in the face, -1 from behind.
+    const facing = (-Math.sin(m.yaw) * -dx + -Math.cos(m.yaw) * -dz) / len;
+    const def = m.def;
+    if (def.frontArmor !== undefined && by?.tool === 'pickaxe') {
+      // A pickaxe cracks the shell from any side.
+      damage *= 2;
+      this.events.event(m.id, 'crit', m.body.x, m.body.z);
+    } else if (def.frontArmor !== undefined && facing > 0.2 && by) {
+      damage *= def.frontArmor;
+      this.events.event(m.id, 'clang', m.body.x, m.body.z);
+      m.stun = Math.max(m.stun, 30); // curls up in its shell
+    } else if (def.backWeakness && facing < -0.3) {
+      damage *= def.backWeakness;
+      this.events.event(m.id, 'crit', m.body.x, m.body.z);
+    }
+    if (def.boss && m.stun > 0) damage *= 2.5;
+    m.health -= damage;
+    m.hurtTicks = HURT_TICKS;
+    const push = def.heavy ? 0.15 : 1;
+    if (m.riderId === null) m.body.push((dx / len) * 6 * push, 5 * push, (dz / len) * 6 * push);
     this.events.event(m.id, 'hurt', m.body.x, m.body.z);
+    if (def.kind === Mob.SHADE && m.health > 0 && Math.random() < 0.5) this.blinkAway(m);
     if (m.health <= 0) {
       this.kill(m);
       return true;
@@ -360,6 +411,7 @@ export class MobManager {
     this.events.event(m.id, 'death', m.body.x, m.body.z);
     const drops = m.flags & MobFlag.BABY ? [] : m.def.drops(Math.random, m.flags);
     if (m.flags & MobFlag.SADDLED) drops.push({ id: I.SADDLE, count: 1 });
+    if (m.def.boss) this.events.event(m.id, 'roar', m.body.x, m.body.z);
     this.events.drops(drops, Math.floor(m.body.x), Math.floor(m.body.y), Math.floor(m.body.z));
   }
 
@@ -512,7 +564,7 @@ export class MobManager {
       let nearest = Infinity;
       for (const p of players) nearest = Math.min(nearest, Math.hypot(p.pos[0] - b.x, p.pos[2] - b.z));
       // Animals and traders stay (animals are saved when their ground unloads); monsters wander off.
-      if (b.y < -16 || (m.def.hostile && (nearest > DESPAWN_FAR || (nearest > DESPAWN_IDLE && Math.random() < 1 / 600)))) {
+      if (b.y < -16 || (m.def.hostile && !m.def.boss && (nearest > DESPAWN_FAR || (nearest > DESPAWN_IDLE && Math.random() < 1 / 600)))) {
         this.remove(m.id);
         continue;
       }
@@ -626,10 +678,39 @@ export class MobManager {
 
   private thinkHostile(m: MobEntity, players: MobTarget[], input: MoveInput): MoveInput {
     const b = m.body;
+    if (m.stun > 0) {
+      m.stun--;
+      m.anim |= MobAnim.STUN;
+      return input;
+    }
+    switch (m.def.kind) {
+      case Mob.DUSKWING: return this.thinkFlier(m, players, input);
+      case Mob.MIREFIN: return this.thinkSwimmer(m, players, input);
+      case Mob.MATRIARCH: return this.thinkBoss(m, players, input);
+    }
+    if (m.def.fearsLight && this.blockLightAt(b.x, b.y + 0.5, b.z) >= m.def.fearsLight) {
+      // Driven off by bright light: back away from it (towards the dark).
+      const t = this.pickTarget(m, players);
+      if (t) this.steerAway(m, input, t.pos[0], t.pos[2]);
+      else this.wander(m, input, 0.05);
+      return input;
+    }
     const target = this.pickTarget(m, players);
     if (!target) {
       this.wander(m, input, 0.01);
       return input;
+    }
+    if (m.def.kind === Mob.SHADE && this.thinkShade(m, target, input)) return input;
+    if (m.def.kind === Mob.BRAMBLEHULK) return this.thinkHulk(m, target, players, input);
+    if (m.def.kind === Mob.EMBER_MITE && b.onGround && m.attackCooldown === 0) {
+      // Leaps at its prey.
+      const dx = target.pos[0] - b.x;
+      const dz = target.pos[2] - b.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 1.5 && d < 4) {
+        b.push((dx / d) * 6, 6, (dz / d) * 6);
+        m.attackCooldown = 25;
+      }
     }
     const tx = target.pos[0];
     const ty = target.pos[1];
@@ -1040,6 +1121,322 @@ export class MobManager {
     input.jump = next[1] > Math.floor(b.y + 0.01) || (b.horizontalCollision && b.onGround) || b.inWater;
   }
 
+  // --- Monsters with their own moves -----------------------------------------------
+
+  /** Block light (torches, lamps, glowing blocks) at a point. */
+  private blockLightAt(x: number, y: number, z: number): number {
+    const c = this.world.getChunk(Math.floor(x) >> 4, Math.floor(z) >> 4);
+    const iy = Math.floor(y);
+    if (!c || iy < 0 || iy > 255) return 0;
+    return c.light[idx(Math.floor(x) & 15, iy, Math.floor(z) & 15)] & 15;
+  }
+
+  /** Steers a flier or swimmer towards a point in 3D. */
+  private steer3d(m: MobEntity, input: MoveInput, x: number, y: number, z: number): number {
+    const b = m.body;
+    const dx = x - b.x;
+    const dy = y - (b.y + b.height / 2);
+    const dz = z - b.z;
+    const horiz = Math.hypot(dx, dz);
+    input.yaw = Math.atan2(-dx, -dz);
+    input.forward = horiz > 0.3 ? 1 : 0;
+    input.jump = dy > 0.4 || (b.horizontalCollision && !b.swimmer);
+    input.sneak = dy < -0.4 && !input.jump;
+    m.path = null;
+    return Math.hypot(horiz, dy);
+  }
+
+  /** Duskwing: wanders high; with prey, circles above it, then dives, then climbs away. Torchlight repels it. */
+  private thinkFlier(m: MobEntity, players: MobTarget[], input: MoveInput): MoveInput {
+    const b = m.body;
+    const c = this.world.getChunk(Math.floor(b.x) >> 4, Math.floor(b.z) >> 4);
+    const ground = c ? c.heightmap[(Math.floor(b.x) & 15) | ((Math.floor(b.z) & 15) << 4)] : b.y - 8;
+    m.modeTicks++;
+    if (this.blockLightAt(b.x, b.y, b.z) >= (m.def.fearsLight ?? 99) && m.mode !== 'climb') {
+      m.mode = 'climb';
+      m.modeTicks = 0;
+    }
+    const target = this.pickTarget(m, players);
+    if (m.mode === 'climb') {
+      this.steer3d(m, input, b.x + Math.sin(m.yaw) * -4, ground + 14, b.z + Math.cos(m.yaw) * -4);
+      if (m.modeTicks > 40) m.mode = '';
+      return input;
+    }
+    if (!target) {
+      m.mode = '';
+      // Lazy loops well above the ground.
+      if (m.modeTicks % 80 === 0) m.dashDir = [Math.random() * 2 - 1, Math.random() * 2 - 1];
+      this.steer3d(m, input, b.x + m.dashDir[0] * 6, ground + 9 + Math.sin(m.modeTicks / 30) * 2, b.z + m.dashDir[1] * 6);
+      return input;
+    }
+    const [tx, ty, tz] = target.pos;
+    if (m.mode === 'dive') {
+      m.anim |= MobAnim.DASH;
+      b.flySpeed = m.def.speed * 1.7;
+      const d = this.steer3d(m, input, tx, ty + 1.1, tz);
+      if (d < 1.2 && m.attackCooldown === 0) {
+        target.hurt(m.def.damage, `mob:${m.def.key}`, [b.x, b.y, b.z]);
+        this.ownerHurt(target.key, { mob: m.id });
+        m.attackCooldown = MOB_ATTACK_TICKS;
+        m.anim |= MobAnim.ATTACK;
+        m.mode = 'climb';
+        m.modeTicks = 0;
+      } else if (m.modeTicks > 70 || b.horizontalCollision) {
+        m.mode = 'climb';
+        m.modeTicks = 0;
+      }
+      return input;
+    }
+    b.flySpeed = m.def.speed;
+    // Circle above the prey, then dive (if it isn't standing in torchlight).
+    const a = m.modeTicks * 0.06 + m.id;
+    this.steer3d(m, input, tx + Math.cos(a) * 5, ty + 5.5, tz + Math.sin(a) * 5);
+    if (m.mode !== 'circle') {
+      m.mode = 'circle';
+      m.modeTicks = 0;
+    } else if (m.modeTicks > 60 + (m.id % 40) && this.blockLightAt(tx, ty + 1, tz) < (m.def.fearsLight ?? 99) && this.canSee(b.x, b.y, b.z, tx, ty + 1.2, tz)) {
+      m.mode = 'dive';
+      m.modeTicks = 0;
+    }
+    return input;
+  }
+
+  /** Mirefin: swims after people in the water; on land it flops about, drying out. */
+  private thinkSwimmer(m: MobEntity, players: MobTarget[], input: MoveInput): MoveInput {
+    const b = m.body;
+    if (!b.inWater) {
+      // Out of water: flop towards any water close by, and dry out.
+      b.walkSpeed = 1;
+      if (++m.dry > 40 && m.dry % 20 === 0) this.hit(m.id, 1, [b.x, b.y - 1, b.z]);
+      const water = this.waterNear(b.x, b.y, b.z, 4);
+      if (water) {
+        input.yaw = Math.atan2(-(water[0] + 0.5 - b.x), -(water[2] + 0.5 - b.z));
+        input.forward = 1;
+      } else input.yaw = m.yaw + (Math.random() - 0.5) * 2;
+      input.jump = b.onGround && Math.random() < 0.15;
+      return input;
+    }
+    m.dry = 0;
+    b.walkSpeed = m.def.speed;
+    let target: MobTarget | null = null;
+    let best = m.def.followRange ?? TARGET_RANGE;
+    for (const p of players) {
+      if (!p.alive || p.creative || !p.inWater) continue;
+      const d = Math.hypot(p.pos[0] - b.x, p.pos[1] - b.y, p.pos[2] - b.z);
+      if (d < best) {
+        best = d;
+        target = p;
+      }
+    }
+    if (target) {
+      const d = this.steer3d(m, input, target.pos[0], target.pos[1] + 0.6, target.pos[2]);
+      if (d < 1.3 && m.attackCooldown === 0) {
+        target.hurt(m.def.damage, `mob:${m.def.key}`, [b.x, b.y, b.z]);
+        m.attackCooldown = MOB_ATTACK_TICKS;
+        m.anim |= MobAnim.ATTACK;
+      }
+      return input;
+    }
+    // Drift between spots in the water, staying under the surface.
+    if (--m.modeTicks <= 0 || !m.pathGoal) {
+      const spot = this.waterNear(b.x + (Math.random() - 0.5) * 10, b.y - 1, b.z + (Math.random() - 0.5) * 10, 3);
+      m.pathGoal = spot ?? [Math.floor(b.x), Math.floor(b.y), Math.floor(b.z)];
+      m.modeTicks = 60 + Math.floor(Math.random() * 60);
+    }
+    const g = m.pathGoal;
+    this.steer3d(m, input, g[0] + 0.5, g[1] + 0.3, g[2] + 0.5);
+    if (this.world.getBlock(Math.floor(b.x), Math.floor(b.y + b.height + 0.2), Math.floor(b.z)) !== B.WATER) {
+      input.jump = false;
+      input.sneak = true;
+    }
+    return input;
+  }
+
+  /** The nearest water cell with water above it (not just a surface film) within r of a point. */
+  private waterNear(x: number, y: number, z: number, r: number): Cell | null {
+    let best: Cell | null = null;
+    let bestD = Infinity;
+    for (let i = 0; i < 24; i++) {
+      const cx = Math.floor(x + (Math.random() - 0.5) * 2 * r);
+      const cy = Math.floor(y + (Math.random() - 0.5) * r);
+      const cz = Math.floor(z + (Math.random() - 0.5) * 2 * r);
+      if (this.world.getBlock(cx, cy, cz) !== B.WATER) continue;
+      const d = Math.hypot(cx - x, cy - y, cz - z);
+      if (d < bestD) {
+        bestD = d;
+        best = [cx, cy, cz];
+      }
+    }
+    return best;
+  }
+
+  /** Shade: stalks, then blinks to just behind its prey and strikes. Returns true if it acted. */
+  private thinkShade(m: MobEntity, target: MobTarget, input: MoveInput): boolean {
+    const b = m.body;
+    const [tx, ty, tz] = target.pos;
+    const dist = Math.hypot(tx - b.x, tz - b.z);
+    if (--m.timers[0] > 0 || dist < 3 || dist > 20) return false;
+    m.timers[0] = 90 + Math.floor(Math.random() * 70);
+    // Behind them = opposite to where they look.
+    const bx = tx + Math.sin(target.yaw) * 2;
+    const bz = tz + Math.cos(target.yaw) * 2;
+    for (const [ox, oz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const x = Math.floor(bx) + ox;
+      const z = Math.floor(bz) + oz;
+      for (const y of [Math.floor(ty), Math.floor(ty) + 1, Math.floor(ty) - 1]) {
+        if (!standable(this.pathWorld, x, y, z, 2) || this.blockLightAt(x, y + 1, z) >= (m.def.fearsLight ?? 99)) continue;
+        this.events.event(m.id, 'blink', b.x, b.z);
+        b.x = x + 0.5;
+        b.y = y;
+        b.z = z + 0.5;
+        b.vx = b.vy = b.vz = 0;
+        m.yaw = Math.atan2(-(tx - b.x), -(tz - b.z));
+        input.yaw = m.yaw;
+        m.path = null;
+        m.attackCooldown = 6;
+        this.events.event(m.id, 'blink', b.x, b.z);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** A hit shade sometimes vanishes and reappears a little way off. */
+  private blinkAway(m: MobEntity): void {
+    const b = m.body;
+    for (let i = 0; i < 10; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 6 + Math.random() * 4;
+      const x = Math.floor(b.x + Math.cos(a) * r);
+      const z = Math.floor(b.z + Math.sin(a) * r);
+      for (let y = Math.floor(b.y) + 2; y >= Math.floor(b.y) - 3; y--) {
+        if (!this.world.getChunk(x >> 4, z >> 4) || !standable(this.pathWorld, x, y, z, 2)) continue;
+        this.events.event(m.id, 'blink', b.x, b.z);
+        b.x = x + 0.5;
+        b.y = y;
+        b.z = z + 0.5;
+        b.vx = b.vy = b.vz = 0;
+        m.path = null;
+        this.events.event(m.id, 'blink', b.x, b.z);
+        return;
+      }
+    }
+  }
+
+  /** Bramblehulk: walks up, winds up, and slams the ground around it. */
+  private thinkHulk(m: MobEntity, target: MobTarget, players: MobTarget[], input: MoveInput): MoveInput {
+    const b = m.body;
+    const [tx, ty, tz] = target.pos;
+    const dist = Math.hypot(tx - b.x, tz - b.z);
+    input.yaw = Math.atan2(-(tx - b.x), -(tz - b.z));
+    if (m.windup > 0) {
+      m.anim |= MobAnim.WINDUP;
+      if (--m.windup === 0) {
+        this.events.event(m.id, 'slam', b.x, b.z);
+        for (const p of players) {
+          if (!p.alive || p.creative) continue;
+          const d = Math.hypot(p.pos[0] - b.x, p.pos[2] - b.z);
+          if (d > SLAM_RADIUS || Math.abs(p.pos[1] - b.y) > 2.5) continue;
+          p.hurt(Math.max(2, Math.round(m.def.damage * (1 - d / (SLAM_RADIUS + 1)))), `mob:${m.def.key}`, [b.x, b.y - 1, b.z], 2.2);
+          this.ownerHurt(p.key, { mob: m.id });
+        }
+        m.attackCooldown = 60;
+      }
+      return input;
+    }
+    if (dist < 3.2 && m.attackCooldown === 0 && Math.abs(ty - b.y) < 2.5) {
+      m.windup = 24;
+      m.anim |= MobAnim.WINDUP;
+      return input;
+    }
+    this.walkTo(m, input, [Math.floor(tx), Math.floor(ty), Math.floor(tz)]);
+    if (dist < 2) input.forward = 0;
+    return input;
+  }
+
+  /**
+   * The matriarch: spits fans of embers, winds up and charges (crashing into a wall stuns her and
+   * leaves her soft), and from half health calls ember mites.
+   */
+  private thinkBoss(m: MobEntity, players: MobTarget[], input: MoveInput): MoveInput {
+    const b = m.body;
+    if (m.phase === 1 && m.health <= m.def.health / 2) {
+      m.phase = 2;
+      this.events.event(m.id, 'roar', b.x, b.z);
+    }
+    const target = this.pickTarget(m, players);
+    if (m.dash > 0) {
+      m.dash--;
+      m.anim |= MobAnim.DASH;
+      b.walkSpeed = 9;
+      input.forward = 1;
+      input.yaw = Math.atan2(-m.dashDir[0], -m.dashDir[1]);
+      for (const p of players) {
+        if (!p.alive || p.creative || m.dashHits.has(p.id)) continue;
+        if (Math.hypot(p.pos[0] - b.x, p.pos[2] - b.z) < b.width / 2 + 0.8 && Math.abs(p.pos[1] - b.y) < 2) {
+          p.hurt(m.def.damage, `mob:${m.def.key}`, [b.x - m.dashDir[0] * 2, b.y, b.z - m.dashDir[1] * 2], 2.5);
+          m.dashHits.add(p.id);
+        }
+      }
+      if (b.horizontalCollision && m.dash < 36) {
+        m.dash = 0;
+        m.stun = 80;
+        this.events.event(m.id, 'stun', b.x, b.z);
+      }
+      return input;
+    }
+    if (!target) {
+      this.wander(m, input, 0.01);
+      return input;
+    }
+    const [tx, ty, tz] = target.pos;
+    const dist = Math.hypot(tx - b.x, tz - b.z);
+    input.yaw = Math.atan2(-(tx - b.x), -(tz - b.z));
+    if (m.windup > 0) {
+      m.anim |= MobAnim.WINDUP;
+      if (--m.windup === 0) {
+        const len = Math.max(0.01, dist);
+        m.dashDir = [(tx - b.x) / len, (tz - b.z) / len];
+        m.dash = 40;
+        m.dashHits.clear();
+      }
+      return input;
+    }
+    const fast = m.phase === 2;
+    for (let i = 0; i < 3; i++) m.timers[i]--;
+    if (m.timers[1] <= 0 && dist > 4 && dist < 22) {
+      m.timers[1] = fast ? 120 : 180;
+      m.windup = 24;
+      return input;
+    }
+    if (m.timers[0] <= 0 && dist > 5 && this.canSee(b.x, b.y + b.height * 0.7, b.z, tx, ty + 1.2, tz)) {
+      m.timers[0] = fast ? 50 : 70;
+      const n = fast ? 5 : 3;
+      for (let i = 0; i < n; i++) this.shoot(m, tx, ty + 1, tz, 1, (i - (n - 1) / 2) * 0.22);
+      m.anim |= MobAnim.ATTACK;
+    }
+    if (fast && m.timers[2] <= 0) {
+      m.timers[2] = 300;
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * Math.PI * 2;
+        this.spawn(Mob.EMBER_MITE, b.x + Math.cos(a) * 2.5, b.y + 0.5, b.z + Math.sin(a) * 2.5);
+      }
+      this.events.event(m.id, 'roar', b.x, b.z);
+    }
+    if (dist > 3) this.walkTo(m, input, [Math.floor(tx), Math.floor(ty), Math.floor(tz)]);
+    else if (m.attackCooldown === 0 && Math.abs(ty - b.y) < 2.5) {
+      target.hurt(Math.round(m.def.damage * 0.6), `mob:${m.def.key}`, [b.x, b.y, b.z], 1.5);
+      m.attackCooldown = 30;
+      m.anim |= MobAnim.ATTACK;
+    }
+    return input;
+  }
+
+  /** The living boss nearest to a point (for the boss bar), within r. */
+  bossesNear(x: number, z: number, r: number): MobEntity[] {
+    return [...this.mobs.values()].filter((m) => m.def.boss && m.deadTicks === 0 && Math.hypot(m.body.x - x, m.body.z - z) < r);
+  }
+
   // --- Attacks -----------------------------------------------------------------
 
   private canSee(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): boolean {
@@ -1048,26 +1445,36 @@ export class MobManager {
     return hit === null;
   }
 
-  private shoot(m: MobEntity, tx: number, ty: number, tz: number): void {
+  private shoot(m: MobEntity, tx: number, ty: number, tz: number, style = 0, spread = 0): void {
     const b = m.body;
     const x = b.x;
     const y = b.y + b.height * 0.7;
     const z = b.z;
-    const dx = tx - x;
-    const dz = tz - z;
-    const horiz = Math.hypot(dx, dz);
-    const flight = horiz / THORN_SPEED;
+    const speed = style === 1 ? EMBER_SPEED : THORN_SPEED;
+    const gravity = style === 1 ? THORN_GRAVITY * 0.6 : THORN_GRAVITY;
+    let dx = tx - x;
+    let dz = tz - z;
+    if (spread) {
+      const c = Math.cos(spread);
+      const sn = Math.sin(spread);
+      [dx, dz] = [dx * c - dz * sn, dx * sn + dz * c];
+    }
+    const horiz = Math.max(0.5, Math.hypot(dx, dz));
+    const flight = horiz / speed;
     // Aim a little high to make up for the drop.
-    const vy = (ty - y) / flight + 0.5 * THORN_GRAVITY * flight;
-    const t: Thorn = { id: this.nextId(), x, y, z, vx: (dx / horiz) * THORN_SPEED, vy, vz: (dz / horiz) * THORN_SPEED, age: 0 };
+    const vy = (ty - y) / flight + 0.5 * gravity * flight;
+    const t: Thorn = {
+      id: this.nextId(), style, damage: style === 1 ? EMBER_DAMAGE : 2, gravity, x, y, z,
+      vx: (dx / horiz) * speed, vy, vz: (dz / horiz) * speed, age: 0,
+    };
     this.thorns.set(t.id, t);
-    this.events.spawned({ id: t.id, kind: 'projectile', x, y, z, vx: t.vx, vy: t.vy, vz: t.vz });
+    this.events.spawned({ id: t.id, kind: 'projectile', x, y, z, vx: t.vx, vy: t.vy, vz: t.vz, style: style || undefined });
   }
 
   private tickThorns(players: MobTarget[]): void {
     for (const t of [...this.thorns.values()]) {
       t.age++;
-      t.vy -= THORN_GRAVITY * DT;
+      t.vy -= t.gravity * DT;
       const steps = 4;
       let done = t.age > 60;
       for (let s = 0; s < steps && !done; s++) {
@@ -1078,7 +1485,7 @@ export class MobManager {
         for (const p of players) {
           if (!p.alive || p.creative) continue;
           if (Math.abs(p.pos[0] - t.x) < 0.5 && Math.abs(p.pos[2] - t.z) < 0.5 && t.y > p.pos[1] - 0.1 && t.y < p.pos[1] + 1.9) {
-            p.hurt(2, 'thorn', [t.x - t.vx, t.y, t.z - t.vz]);
+            p.hurt(t.damage, t.style === 1 ? 'mob:matriarch' : 'thorn', [t.x - t.vx, t.y, t.z - t.vz]);
             done = true;
             break;
           }
@@ -1116,10 +1523,13 @@ export class MobManager {
     if (alive.length === 0) return;
     let hostile = 0;
     let animals = 0;
+    let water = 0;
     for (const m of this.mobs.values()) {
-      if (m.def.hostile) hostile++;
+      if (m.def.swimmer) water++;
+      else if (m.def.hostile) hostile++;
       else if (m.def.animal) animals++;
     }
+    if (water < WATER_PER_PLAYER * alive.length && Math.random() < 0.2) this.trySpawnWater(alive);
     const sun = daylight(time);
     const hostileCap = Math.min(HOSTILE_MAX, HOSTILE_PER_PLAYER * alive.length);
     for (const p of alive) {
@@ -1159,9 +1569,34 @@ export class MobManager {
     const l = c.light[idx(x & 15, y, z & 15)];
     if (Math.max(l & 15, (l >> 4) * sun) > 7) return 0;
     if (!this.farFromPlayers(players, x, z)) return 0;
-    const kind = pickSpawnKind(HOSTILE_MOBS, Math.random());
+    // The zone decides who lives here: the Ember Deep, caves (no sky above), or the open surface.
+    const zone: Zone = isDeep(x) ? 'deep' : (l >> 4) < 8 ? 'cave' : 'surface';
+    if (zone === 'surface' && Math.random() < 0.15) {
+      // Night fliers appear in the air above.
+      const ay = y + 7 + Math.floor(Math.random() * 4);
+      const al = c.light[idx(x & 15, Math.min(255, ay), z & 15)];
+      if (this.world.getBlock(x, ay, z) === B.AIR && Math.max(al & 15, (al >> 4) * sun) <= 7) {
+        return this.spawnGroup(pickSpawnKind(monstersFor('air'), Math.random()), x, ay, z, Math.min(room, 1 + Math.floor(Math.random() * 2)));
+      }
+    }
+    const pool = monstersFor(zone);
+    if (pool.length === 0) return 0;
+    const kind = pickSpawnKind(pool, Math.random());
     const [gmin, gmax] = mobDef(kind)!.group ?? [1, 1];
     return this.spawnGroup(kind, x, y, z, Math.min(room, gmin + Math.floor(Math.random() * (gmax - gmin + 1))));
+  }
+
+  /** Water monsters: under the surface of deep enough water, near the players, any time of day. */
+  private trySpawnWater(players: MobTarget[]): number {
+    const p = players[Math.floor(Math.random() * players.length)];
+    const [x, z] = this.ringSpot(p);
+    const c = this.world.getChunk(x >> 4, z >> 4);
+    if (!c) return 0;
+    const top = c.heightmap[(x & 15) | ((z & 15) << 4)];
+    if (this.world.getBlock(x, top, z) !== B.WATER || this.world.getBlock(x, top - 2, z) !== B.WATER) return 0;
+    if (!this.farFromPlayers(players, x, z)) return 0;
+    const kind = pickSpawnKind(monstersFor('water'), Math.random());
+    return this.spawn(kind, x + 0.5, top - 2, z + 0.5) ? 1 : 0;
   }
 
   /** Herds by biome: each biome has its own animals (see MobDef.habitat). */
