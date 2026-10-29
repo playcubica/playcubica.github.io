@@ -140,7 +140,8 @@ describe('monsters on the host', () => {
     await tick(200);
     expect(fin.body.inWater).toBe(true);
     expect(session.health).toBeLessThan(20);
-    const stranded = server.mobs.spawn(Mob.MIREFIN, 4.5, 10, 4.5)!;
+    // Within 32 blocks of the player (farther ones may despawn at random), away from the pond.
+    const stranded = server.mobs.spawn(Mob.MIREFIN, 22.5, 10, 6.5)!;
     await tick(120);
     expect(stranded.health).toBeLessThan(12);
   });
