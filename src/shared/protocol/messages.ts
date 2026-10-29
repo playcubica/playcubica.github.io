@@ -41,6 +41,8 @@ export type ClientMsg =
   /** Right-click on a creature (traders). */
   | { t: 'interact'; entityId: number }
   | { t: 'trade'; entityId: number; offer: number }
+  /** Get off a mount (sneak). */
+  | { t: 'dismount' }
   /** Client settings the host needs. */
   | { t: 'settings'; viewDistance: number }
   /** Click in a window (see Window.ts); window 0 is the player's inventory. */
@@ -70,6 +72,8 @@ export const Anim = {
   SNEAK: 1,
   SWING: 2,
   FLYING: 4,
+  /** Sitting on a mount. */
+  RIDING: 8,
 } as const;
 
 export interface EntityState {
@@ -108,7 +112,14 @@ export type ServerMsg =
   | { t: 'entityMove'; data: number[] }
   /** Creature movement, flat [id, x, y, z, yaw, anim, …] (10 Hz). */
   | { t: 'mobMove'; data: number[] }
-  | { t: 'entityEvent'; id: number; event: 'hurt' | 'death' | 'spores' }
+  | { t: 'entityEvent'; id: number; event: MobEventName }
+  /** A creature's flags (MobFlag), look or owner changed. */
+  | { t: 'mobState'; entity: EntityInfo }
+  /**
+   * This player sits on a mount (or got off: entityId null). `steer`: the mount follows the rider's
+   * input (tamed + saddled); otherwise it stands still under them.
+   */
+  | { t: 'ride'; entityId: number | null; speed?: number; jump?: number; steer?: boolean; width?: number; height?: number }
   /** A trader's offers (after 'interact'). */
   | { t: 'trades'; entityId: number; profession: number; offers: Trade[] }
   /** The host pushes this player (hit by a creature). */
@@ -138,9 +149,11 @@ export type ServerMsg =
    */
   | { t: 'succession'; worldId: string; code: string; order: Array<{ id: number; name: string }> };
 
+export type MobEventName = 'hurt' | 'death' | 'spores' | 'love' | 'tamed' | 'smoke' | 'baby' | 'shear' | 'ram';
+
 export type EntityInfo =
   | { id: number; kind: 'item'; x: number; y: number; z: number; item: ItemStack }
-  | { id: number; kind: 'mob'; mob: number; x: number; y: number; z: number; yaw: number; variant?: number }
+  | { id: number; kind: 'mob'; mob: number; x: number; y: number; z: number; yaw: number; variant?: number; flags?: number; owner?: string }
   /** A flying thorn; clients extrapolate it from its launch velocity. */
   | { id: number; kind: 'projectile'; x: number; y: number; z: number; vx: number; vy: number; vz: number }
   /** Falling sand/gravel (`raw` block value); moves arrive in entityMove like items. */

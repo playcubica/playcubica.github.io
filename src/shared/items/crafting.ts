@@ -47,6 +47,10 @@ const shaped: Shaped[] = [
   { pattern: ['CLC', 'LDL', 'CLC'], keys: { C: B.CUT_STONE, L: B.LUMEN_CRYSTAL, D: I.DIAMOND }, result: { id: B.RIFT_STONE, count: 1 } },
   { pattern: ['PP', 'PP', 'PP'], keys: { P: PLANKS }, result: { id: B.ASHWOOD_DOOR, count: 3 } },
   { pattern: ['SS', 'SS'], keys: { S: B.STONE }, result: { id: B.CUT_STONE, count: 4 } },
+  // Animals.
+  { pattern: ['I I', ' I '], keys: { I: I.IRON_INGOT }, result: { id: I.BUCKET, count: 1 } },
+  { pattern: ['HHH', 'HIH'], keys: { H: I.HIDE, I: I.IRON_INGOT }, result: { id: I.SADDLE, count: 1 } },
+  { pattern: [' I', 'I '], keys: { I: I.IRON_INGOT }, result: { id: I.SHEARS, count: 1 } },
 ];
 
 const shapeless: Shapeless[] = [
@@ -133,6 +137,8 @@ export const SMELTING: ReadonlyMap<number, number> = new Map([
   [B.RUBBLESTONE, B.STONE],
   [I.ASHFRUIT, I.BAKED_ASHFRUIT],
   [I.RAW_MEAT, I.COOKED_MEAT],
+  [I.RAW_FOWL, I.COOKED_FOWL],
+  [I.EGG, I.FRIED_EGG],
   ...LOGS.map((l) => [l, I.COAL] as [number, number]),
 ]);
 

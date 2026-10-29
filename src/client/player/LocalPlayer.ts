@@ -6,6 +6,16 @@ import { KEYS, type Controls } from '../input/Controls';
 const STEP = 1 / 60;
 const DOUBLE_TAP_MS = 300;
 
+/** Sitting on a creature: the body takes its size, speed and jump; `steer` = the rider controls it. */
+export interface Mount {
+  id: number;
+  speed: number;
+  jump: number;
+  steer: boolean;
+  width: number;
+  height: number;
+}
+
 /** The player this client controls: input → fixed-step physics. */
 export class LocalPlayer {
   readonly body = new PlayerBody();
@@ -15,6 +25,10 @@ export class LocalPlayer {
   private ready = false;
   private acc = 0;
   private lastJumpTap = 0;
+  riding: Mount | null = null;
+  /** Sneak while riding = get off (the host decides). */
+  onDismount: (() => void) | null = null;
+  private dismountAsked = false;
 
   constructor(private readonly world: ClientWorld, private readonly controls: Controls) {}
 
@@ -24,6 +38,30 @@ export class LocalPlayer {
     this.body.z = z;
     this.body.vx = this.body.vy = this.body.vz = 0;
     this.ready = false;
+  }
+
+  mount(m: Mount): void {
+    const b = this.body;
+    this.riding = m;
+    this.dismountAsked = false;
+    b.flying = false;
+    b.width = m.width;
+    b.height = m.height;
+    b.walkSpeed = m.speed;
+    b.jumpVelocity = m.jump;
+    b.eyeOverride = m.height - 0.2;
+  }
+
+  unmount(): void {
+    const b = this.body;
+    const fresh = new PlayerBody();
+    this.riding = null;
+    b.width = fresh.width;
+    b.height = fresh.height;
+    b.walkSpeed = fresh.walkSpeed;
+    b.jumpVelocity = fresh.jumpVelocity;
+    b.eyeOverride = null;
+    b.y += 0.1;
   }
 
   /** Called on every key press (for double-tap detection). */
@@ -51,7 +89,7 @@ export class LocalPlayer {
       }
       this.ready = true;
     }
-    if (!this.canFly) b.flying = false;
+    if (!this.canFly || this.riding) b.flying = false;
 
     const c = this.controls;
     const input: MoveInput = {
@@ -62,6 +100,22 @@ export class LocalPlayer {
       sprint: this.canSprint && (c.isDown(KEYS.sprint) || (b.sprinting && (c.isDown(KEYS.forward) || c.padMove.forward > 0.3))),
       yaw: c.yaw,
     };
+    const r = this.riding;
+    if (r) {
+      if (input.sneak && !this.dismountAsked) {
+        this.dismountAsked = true;
+        this.onDismount?.();
+      }
+      input.sneak = false;
+      input.sprint = false;
+      if (!r.steer) {
+        input.forward = input.strafe = 0;
+        input.jump = false;
+      } else if (b.horizontalCollision && b.onGround && input.forward > 0) {
+        // A horse takes single steps by itself.
+        input.jump = true;
+      }
+    }
     this.acc = Math.min(this.acc + dt, 0.25);
     while (this.acc >= STEP) {
       b.step(this.world, input, STEP);

@@ -65,6 +65,15 @@ export const I = {
   RUNE_KEEN: 4119,
   RUNE_ENDURE: 4120,
   RUNE_BOUNTY: 4121,
+  RAW_FOWL: 4122,
+  COOKED_FOWL: 4123,
+  EGG: 4124,
+  FRIED_EGG: 4125,
+  FEATHER: 4126,
+  BUCKET: 4127,
+  MILK_BUCKET: 4128,
+  SADDLE: 4129,
+  SHEARS: 4130,
 } as const;
 
 /** Rune item ids in the order of ItemStack.runes. */
@@ -149,6 +158,16 @@ item(I.FROSTBERRIES, 'frostberries', 'פירות כפור', { food: { hunger: 2,
 item(I.RAW_MEAT, 'raw_meat', 'בשר נא', { food: { hunger: 3, saturation: 1.8 } });
 item(I.COOKED_MEAT, 'cooked_meat', 'בשר צלוי', { food: { hunger: 8, saturation: 12.8 } });
 item(I.FLEECE, 'fleece', 'צמר');
+item(I.RAW_FOWL, 'raw_fowl', 'עוף נא', { food: { hunger: 2, saturation: 1.2 } });
+item(I.COOKED_FOWL, 'cooked_fowl', 'עוף צלוי', { food: { hunger: 6, saturation: 7.2 } });
+item(I.EGG, 'egg', 'ביצה', { maxStack: 16 });
+item(I.FRIED_EGG, 'fried_egg', 'ביצה מטוגנת', { food: { hunger: 4, saturation: 5 } });
+item(I.FEATHER, 'feather', 'נוצה');
+item(I.BUCKET, 'bucket', 'דלי', { maxStack: 16 });
+// Drinking it is like eating; the empty bucket comes back.
+item(I.MILK_BUCKET, 'milk_bucket', 'דלי חלב', { maxStack: 1, food: { hunger: 3, saturation: 4 } });
+item(I.SADDLE, 'saddle', 'אוכף', { maxStack: 1 });
+item(I.SHEARS, 'shears', 'מזמרה', { maxStack: 1 });
 item(I.HIDE, 'hide', 'עור');
 item(I.SILK, 'silk', 'חוט משי');
 item(I.GLOOM_ASH, 'gloom_ash', 'אפר אפלה', { fuel: 800 });

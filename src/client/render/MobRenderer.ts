@@ -1,32 +1,19 @@
 import * as THREE from 'three';
-import { Mob, mobDef } from '../../shared/entities/mobs';
-import type { EntityInfo } from '../../shared/protocol/messages';
+import { BABY_SCALE, Mob, MobAnim, MobFlag, mobDef } from '../../shared/entities/mobs';
+import type { EntityInfo, MobEventName } from '../../shared/protocol/messages';
 import { hash01, mulberry32 } from '../../shared/rng';
 import type { ClientWorld } from '../ClientWorld';
+import { SPECIES, type AnimState, type Bone, type Box, type Detail, type Pose, type RGB, type Rig } from './mobModels';
 
-// Creatures as block models built from boxes (sizes in 1/16 block "pixels", positions are box
-// centres, y measured up from the feet, front faces -z). Every box gets its own pixel-art skin,
-// one texel per model pixel, painted from its colour and a surface pattern; the skins of a model
-// share one canvas atlas (built once per kind).
+// Creatures as articulated box models. Animals come from species rigs (mobModels.ts: own proportions,
+// features, variants, baby forms and animations); monsters and traders from role-tagged box lists.
+// Every box gets a pixel-art skin painted from its colour, a pattern and pixel details, one texel per
+// model pixel; the skins of a model share one canvas atlas, built once per kind/look and shared.
 
-type RGB = [number, number, number];
 type Role = 'legA' | 'legB' | 'arm' | 'cap';
-type Pattern = 'plain' | 'fur' | 'fleece' | 'cloth' | 'rags' | 'ribs' | 'spots' | 'feather' | 'chitin';
 
-interface Part {
-  size: [number, number, number];
-  at: [number, number, number];
-  color: RGB;
-  top?: RGB;
+interface Part extends Box {
   role?: Role;
-  /** Self-lit (eyes, glowing spots). */
-  glow?: boolean;
-  /** Surface texture (default: fine noise). */
-  pattern?: Pattern;
-  /** Light flecks for 'spots'. */
-  spot?: RGB;
-  /** The lowest texel rows of the side faces in another colour (hooves, boots, a hem). */
-  band?: { rows: number; color: RGB };
 }
 
 const PX = 1 / 16;
@@ -47,11 +34,9 @@ const pair = (p: Part): Part[] => [p, { ...p, at: [-p.at[0], p.at[1], p.at[2]] }
 /** Placeholder colour replaced by the trader's profession colour. */
 const ROBE: RGB = [-1, -1, -1];
 const ROBE_COLORS: RGB[] = [[0.35, 0.55, 0.25], [0.45, 0.33, 0.24], [0.42, 0.26, 0.6]];
-
 const SKIN: RGB = [0.85, 0.68, 0.52];
-const HOOF: RGB = [0.16, 0.12, 0.1];
-const BONE: RGB = [0.92, 0.88, 0.76];
 
+/** Monsters and traders: boxes with limb roles, animated by the generic animator. */
 const MODELS: Record<number, Part[]> = {
   [Mob.TRADER]: [
     { size: [8, 20, 6], at: [0, 10, 0], color: ROBE, pattern: 'cloth', band: { rows: 2, color: [0.2, 0.15, 0.1] } },
@@ -64,53 +49,6 @@ const MODELS: Record<number, Part[]> = {
     { size: [2, 3, 1], at: [0, 23, -4.4], color: [0.75, 0.56, 0.42], pattern: 'plain' },
     { size: [11, 1, 11], at: [0, 28.5, 0], color: [0.3, 0.22, 0.14], pattern: 'cloth' },
     { size: [7, 3, 7], at: [0, 30.5, 0], color: [0.3, 0.22, 0.14], pattern: 'cloth', band: { rows: 1, color: ROBE } },
-  ],
-  [Mob.GRAZER]: [
-    { size: [12, 10, 16], at: [0, 11, 0], color: [0.92, 0.89, 0.8], pattern: 'fleece' },
-    { size: [10, 8, 3], at: [0, 13, -9], color: [0.9, 0.87, 0.78], pattern: 'fleece' },
-    { size: [6, 6, 6], at: [0, 14, -12], color: [0.36, 0.26, 0.2], top: [0.92, 0.89, 0.8], pattern: 'fur' },
-    { size: [4, 2.5, 1], at: [0, 12.2, -15.4], color: [0.5, 0.38, 0.3], pattern: 'plain' },
-    ...pair({ size: [2, 3, 2], at: [-3.5, 18, -11], color: [0.74, 0.68, 0.56], pattern: 'ribs' }),
-    ...pair({ size: [2, 1, 2], at: [-4.5, 15.5, -11], color: [0.3, 0.22, 0.17] }),
-    ...eyes(1.6, 15, -15.1),
-    { size: [3, 3, 2], at: [0, 13, 9], color: [0.92, 0.89, 0.8], pattern: 'fleece' },
-    ...legs(3, 6, 4, 5, [0.36, 0.26, 0.2], { pattern: 'fur', band: { rows: 1, color: HOOF } }),
-  ],
-  [Mob.TUSKLING]: [
-    { size: [10, 8, 13], at: [0, 8, 0], color: [0.48, 0.42, 0.28], pattern: 'fur' },
-    { size: [2, 2, 11], at: [0, 13, 0], color: [0.28, 0.22, 0.16], pattern: 'fur' },
-    { size: [8, 7, 6], at: [0, 9, -9], color: [0.44, 0.38, 0.25], pattern: 'fur' },
-    { size: [4, 3, 2], at: [0, 7, -12.5], color: [0.62, 0.48, 0.38], pattern: 'plain' },
-    ...pair({ size: [1, 1, 0.3], at: [-1, 7.5, -13.6], color: [0.3, 0.2, 0.16], pattern: 'plain' }),
-    ...pair({ size: [1, 3, 1], at: [-2.5, 8, -13], color: BONE, pattern: 'plain' }),
-    ...pair({ size: [2, 2, 1], at: [-3, 13.5, -9], color: [0.36, 0.3, 0.2] }),
-    ...eyes(2, 10.5, -12.1),
-    { size: [1, 3, 1], at: [0, 9, 7], color: [0.28, 0.22, 0.16] },
-    ...legs(3, 4, 3.5, 4, [0.3, 0.25, 0.18], { pattern: 'fur', band: { rows: 1, color: HOOF } }),
-  ],
-  [Mob.STILTFOWL]: [
-    { size: [1, 10, 1], at: [-1.5, 5, 0], color: [0.9, 0.55, 0.2], role: 'legA', pattern: 'ribs' },
-    { size: [1, 10, 1], at: [1.5, 5, 0], color: [0.9, 0.55, 0.2], role: 'legB', pattern: 'ribs' },
-    { size: [6, 6, 9], at: [0, 13, 1], color: [0.42, 0.5, 0.64], pattern: 'feather' },
-    ...pair({ size: [1, 4, 7], at: [-3.5, 13.5, 1.5], color: [0.33, 0.4, 0.55], pattern: 'feather' }),
-    { size: [4, 4, 2], at: [0, 15, 6], color: [0.3, 0.36, 0.5], pattern: 'feather' },
-    { size: [2, 5, 2], at: [0, 18, -3], color: [0.42, 0.5, 0.64], pattern: 'feather' },
-    { size: [3, 3, 4], at: [0, 21, -4], color: [0.45, 0.54, 0.68], pattern: 'feather' },
-    { size: [1, 1, 3], at: [0, 20.5, -7], color: [0.95, 0.8, 0.25], pattern: 'plain' },
-    { size: [1, 3, 2], at: [0, 23.5, -3.5], color: [0.2, 0.75, 0.7], pattern: 'feather' },
-    ...eyes(1.55, 21.5, -5),
-  ],
-  [Mob.HORNOX]: [
-    { size: [14, 12, 20], at: [0, 14, 1], color: [0.45, 0.25, 0.18], pattern: 'fur' },
-    { size: [12, 4, 8], at: [0, 21, -3], color: [0.38, 0.2, 0.14], pattern: 'fleece' },
-    { size: [8, 8, 7], at: [0, 15, -12], color: [0.36, 0.2, 0.14], pattern: 'fur' },
-    { size: [6, 4, 2], at: [0, 13, -16], color: [0.68, 0.55, 0.42], pattern: 'plain' },
-    ...pair({ size: [1, 1, 0.3], at: [-1.5, 13.5, -17.1], color: [0.25, 0.16, 0.12], pattern: 'plain' }),
-    ...pair({ size: [5, 2, 2], at: [-6, 19, -12], color: [0.88, 0.84, 0.72], pattern: 'ribs' }),
-    ...pair({ size: [2, 4, 2], at: [-8, 21, -12], color: [0.88, 0.84, 0.72], pattern: 'ribs', top: [0.6, 0.55, 0.45] }),
-    ...eyes(2.5, 16, -15.6),
-    { size: [2, 8, 2], at: [0, 15, 12], color: [0.38, 0.2, 0.14], band: { rows: 3, color: [0.2, 0.1, 0.07] }, pattern: 'fur' },
-    ...legs(4, 8, 5, 6, [0.3, 0.17, 0.12], { pattern: 'fur', band: { rows: 2, color: HOOF } }),
   ],
   [Mob.GLOOMWALKER]: [
     { size: [4, 12, 4], at: [-2, 6, 0], color: [0.22, 0.19, 0.27], role: 'legA', pattern: 'rags', band: { rows: 2, color: [0.1, 0.09, 0.12] } },
@@ -165,6 +103,20 @@ const MODELS: Record<number, Part[]> = {
   ],
 };
 
+
+/** A monster's box list as a rig: limbs become bones that swing from their top. */
+function partsRig(parts: Part[]): Rig {
+  const root: Bone = { name: 'root', pivot: [0, 0, 0], boxes: [], children: [] };
+  const caps: Box[] = [];
+  parts.forEach((p, i) => {
+    if (p.role === 'cap') caps.push(p);
+    else if (p.role) root.children!.push({ name: `${p.role}${i}`, role: p.role, pivot: [p.at[0], p.at[1] + p.size[1] / 2, p.at[2]], boxes: [p] });
+    else root.boxes.push(p);
+  });
+  if (caps.length) root.children!.push({ name: 'cap', role: 'cap', pivot: [0, caps[0].at[1], 0], boxes: caps });
+  return { bones: [root], scale: 1 };
+}
+
 // --- Skins ---------------------------------------------------------------------------------
 
 /** BoxGeometry face order: +x, -x, +y, -y, +z, -z. Texel size of each face (width, height). */
@@ -174,7 +126,7 @@ function faceSizes([w, h, d]: [number, number, number]): Array<[number, number]>
 }
 
 /** Colour of one texel (row 0 = top of a side face). */
-function texel(p: Part, face: number, x: number, y: number, w: number, h: number, seed: number, r: () => number): RGB {
+function texel(p: Box, face: number, x: number, y: number, w: number, h: number, seed: number, r: () => number): RGB {
   const side = face !== 2 && face !== 3;
   if (p.band && side && p.band.rows > 0 && y >= h - p.band.rows) return p.band.color.map((c) => c * (0.9 + r() * 0.12)) as RGB;
   const base = face === 2 && p.top ? p.top : p.color;
@@ -191,6 +143,10 @@ function texel(p: Part, face: number, x: number, y: number, w: number, h: number
       k = 0.9 + r() * 0.12;
       if ((x + (y >> 1) * 2) % 3 === 0 && y % 2 === 0) k = 1.07;
       if (r() < 0.14) k = 0.84;
+      break;
+    case 'shaggy':
+      // Long hair: vertical streaks on the sides.
+      k = side ? 0.86 + hash01(seed, x, 0, face) * 0.22 + r() * 0.06 : 0.9 + r() * 0.15;
       break;
     case 'cloth':
       k = 0.94 + r() * 0.08;
@@ -213,13 +169,35 @@ function texel(p: Part, face: number, x: number, y: number, w: number, h: number
     case 'spots':
       if (p.spot && hash01(seed, x >> 1, y >> 1, face) < 0.16) return p.spot.map((c) => c * (0.95 + r() * 0.08)) as RGB;
       break;
+    case 'patches':
+      // Big irregular patches (a cow's hide, a calico cat).
+      if (p.spot && hash01(seed, (x + (hash01(seed, y, 1, face) < 0.5 ? 1 : 0)) >> 2, y >> 2, face) < 0.36) return p.spot.map((c) => c * (0.94 + r() * 0.08)) as RGB;
+      k = 0.94 + r() * 0.08;
+      break;
+    case 'stripes':
+      // Tabby / barred stripes across the body.
+      if (p.spot && (side ? x % 3 === 0 : y % 3 === 0)) return p.spot.map((c) => c * (0.92 + r() * 0.1)) as RGB;
+      k = 0.92 + r() * 0.12;
+      break;
   }
   // A slightly darker rim keeps the boxes crisp, like the block tiles.
   if (p.pattern !== 'plain' && w >= 4 && h >= 4 && (x === 0 || y === 0 || x === w - 1 || y === h - 1)) k *= 0.9;
   return base.map((c) => Math.min(1, c * k)) as RGB;
 }
 
+/** Pixel details of a box face, in that face's texel coordinates. */
+function detailsFor(p: Box, face: number, w: number): Detail[] {
+  if (face === 5) return p.face ?? [];
+  if (!p.side) return [];
+  // Side details are measured from the front: on +x the front is the right end, on -x the left.
+  if (face === 0) return p.side.map(([x, y, dw, dh, col]) => [w - x - dw, y, dw, dh, col]);
+  if (face === 1) return p.side;
+  return [];
+}
+
 interface Kit {
+  rig: Rig;
+  /** Geometry per box, in rig order (depth-first over bones). */
   geometries: THREE.BufferGeometry[];
   texture: THREE.CanvasTexture;
   glow: THREE.MeshBasicMaterial;
@@ -227,9 +205,18 @@ interface Kit {
 
 const ATLAS_W = 128;
 
-/** Geometries (with atlas UVs) and the atlas texture for a model. */
-function buildKit(parts: Part[], seed: number): Kit {
-  // Shelf-pack every face of every part.
+function rigBoxes(bones: Bone[], out: Box[] = []): Box[] {
+  for (const b of bones) {
+    out.push(...b.boxes);
+    if (b.children) rigBoxes(b.children, out);
+  }
+  return out;
+}
+
+/** Geometries (with atlas UVs) and the atlas texture for a rig. */
+function buildKit(rig: Rig, seed: number): Kit {
+  const parts = rigBoxes(rig.bones);
+  // Shelf-pack every face of every box.
   const rects: Array<Array<[number, number, number, number]>> = [];
   let x = 0;
   let y = 0;
@@ -243,24 +230,25 @@ function buildKit(parts: Part[], seed: number): Kit {
       return r;
     }));
   }
-  const H = y + row;
+  const H = Math.max(1, y + row);
   const canvas = document.createElement('canvas');
   canvas.width = ATLAS_W;
-  canvas.height = Math.max(1, H);
+  canvas.height = H;
   const ctx = canvas.getContext('2d')!;
-  const img = ctx.createImageData(ATLAS_W, canvas.height);
+  const img = ctx.createImageData(ATLAS_W, H);
+  const put = (px: number, py: number, c: RGB) => {
+    const o = (py * ATLAS_W + px) * 4;
+    img.data[o] = c[0] * 255;
+    img.data[o + 1] = c[1] * 255;
+    img.data[o + 2] = c[2] * 255;
+    img.data[o + 3] = 255;
+  };
   parts.forEach((p, i) => {
     const r = mulberry32(seed * 131 + i);
     rects[i].forEach(([rx, ry, w, h], face) => {
-      for (let ty = 0; ty < h; ty++) {
-        for (let tx = 0; tx < w; tx++) {
-          const c = p.glow ? p.color : texel(p, face, tx, ty, w, h, seed + i, r);
-          const o = ((ry + ty) * ATLAS_W + rx + tx) * 4;
-          img.data[o] = c[0] * 255;
-          img.data[o + 1] = c[1] * 255;
-          img.data[o + 2] = c[2] * 255;
-          img.data[o + 3] = 255;
-        }
+      for (let ty = 0; ty < h; ty++) for (let tx = 0; tx < w; tx++) put(rx + tx, ry + ty, p.glow ? p.color : texel(p, face, tx, ty, w, h, seed + i, r));
+      for (const [dx, dy, dw, dh, col] of detailsFor(p, face, w)) {
+        for (let ty = Math.max(0, dy); ty < Math.min(h, dy + dh); ty++) for (let tx = Math.max(0, dx); tx < Math.min(w, dx + dw); tx++) put(rx + tx, ry + ty, col);
       }
     });
   });
@@ -280,21 +268,25 @@ function buildKit(parts: Part[], seed: number): Kit {
       const [rx, ry, rw, rh] = rects[i][f];
       const k = p.glow ? 1 : shade[f];
       for (let v = f * 6; v < f * 6 + 6; v++) {
-        uv.setXY(v, (rx + uv.getX(v) * rw) / ATLAS_W, 1 - (ry + (1 - uv.getY(v)) * rh) / canvas.height);
+        uv.setXY(v, (rx + uv.getX(v) * rw) / ATLAS_W, 1 - (ry + (1 - uv.getY(v)) * rh) / H);
         colors.push(k, k, k);
       }
     }
     g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     return g;
   });
-  return { geometries, texture, glow: new THREE.MeshBasicMaterial({ map: texture, vertexColors: true }) };
+  return { rig, geometries, texture, glow: new THREE.MeshBasicMaterial({ map: texture, vertexColors: true }) };
 }
 
 interface MobView {
   kind: number;
+  variant: number;
+  flags: number;
+  lookKey: string;
   root: THREE.Group;
   model: THREE.Group;
-  parts: Array<{ obj: THREE.Object3D; role?: Role }>;
+  pose: Pose;
+  roles: Array<{ obj: THREE.Object3D; role: Role }>;
   material: THREE.MeshBasicMaterial;
   x: number;
   y: number;
@@ -306,6 +298,8 @@ interface MobView {
   tyaw: number;
   anim: number;
   walk: number;
+  vy: number;
+  seed: number;
   hurt: number;
   dying: number;
 }
@@ -317,18 +311,39 @@ interface ThornView {
   t: number;
 }
 
-/** Renders creatures, thorns and spore clouds; also answers "which creature is the crosshair on". */
+interface Puff {
+  points: THREE.Points;
+  t: number;
+  life: number;
+  rise: number;
+  grow: number;
+}
+
+const PUFFS: Partial<Record<MobEventName, { color: number; count: number; size: number; rise: number; grow: number; life: number }>> = {
+  love: { color: 0xff4060, count: 7, size: 0.16, rise: 0.8, grow: 0.4, life: 1.2 },
+  tamed: { color: 0xff4060, count: 12, size: 0.18, rise: 0.9, grow: 0.8, life: 1.4 },
+  baby: { color: 0xff6080, count: 9, size: 0.14, rise: 0.7, grow: 0.6, life: 1.2 },
+  smoke: { color: 0x9a9a9a, count: 14, size: 0.2, rise: 0.6, grow: 1.2, life: 1.0 },
+  spores: { color: 0x73e6b3, count: 160, size: 0.22, rise: 0, grow: 2.5, life: 1.4 },
+  shear: { color: 0xf2f0e8, count: 10, size: 0.14, rise: -0.6, grow: 0.8, life: 0.8 },
+};
+
+/** Renders creatures, thorns and particles; also answers "which creature is the crosshair on". */
 export class MobRenderer {
   private readonly mobs = new Map<number, MobView>();
   private readonly thorns = new Map<number, ThornView>();
-  private readonly clouds: Array<{ points: THREE.Points; t: number }> = [];
-  /** Skins and geometries per kind/variant, shared by every creature of that kind. */
-  private readonly kits = new Map<number, Kit>();
+  private readonly puffs: Puff[] = [];
   private readonly thornMaterial = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.85, 0.82, 0.45) });
   private readonly thornGeometry = new THREE.BoxGeometry(1 * PX, 1 * PX, 6 * PX);
+  /** Skins and geometries per kind/look, shared by every creature that looks the same. */
+  private readonly kits = new Map<string, Kit>();
   private readonly ray = new THREE.Ray();
   private readonly hitBox = new THREE.Box3();
   private readonly hitPoint = new THREE.Vector3();
+  /** Gallery: fixed speed / vertical speed per creature instead of measured motion. */
+  readonly motion = new Map<number, { speed: number; vy: number }>();
+  /** The creature this client rides: drawn where the local player is (no network lag). */
+  private ridden: { id: number; at: () => { x: number; y: number; z: number; yaw: number } } | null = null;
 
   constructor(private readonly scene: THREE.Scene, private readonly world: ClientWorld) {}
 
@@ -336,24 +351,57 @@ export class MobRenderer {
     return this.mobs.size;
   }
 
-  private partsFor(kind: number, variant: number): Part[] | null {
-    const parts = MODELS[kind];
-    if (!parts) return null;
-    const robe = ROBE_COLORS[variant] ?? ROBE_COLORS[0];
-    const fill = (c: RGB): RGB => (c === ROBE ? robe : c);
-    return parts.map((p) => ({ ...p, color: fill(p.color), band: p.band && { ...p.band, color: fill(p.band.color) } }));
+  private lookKey(kind: number, variant: number, flags: number): string {
+    return `${kind}:${variant}:${flags & (SPECIES[kind]?.lookFlags ?? 0)}`;
   }
 
-  private kit(kind: number, variant: number): Kit | null {
-    const key = kind * 16 + variant;
+  private kit(kind: number, variant: number, flags: number): Kit | null {
+    const key = this.lookKey(kind, variant, flags);
     let kit = this.kits.get(key);
     if (!kit) {
-      const parts = this.partsFor(kind, variant);
-      if (!parts) return null;
-      kit = buildKit(parts, kind);
+      const species = SPECIES[kind];
+      let rig: Rig;
+      if (species) rig = species.build({ variant, flags });
+      else {
+        const parts = MODELS[kind];
+        if (!parts) return null;
+        const robe = ROBE_COLORS[variant] ?? ROBE_COLORS[0];
+        const fill = (c: RGB): RGB => (c === ROBE ? robe : c);
+        rig = partsRig(parts.map((p) => ({ ...p, color: fill(p.color), band: p.band && { ...p.band, color: fill(p.band.color) } })));
+      }
+      kit = buildKit(rig, kind * 7 + variant);
       this.kits.set(key, kit);
     }
     return kit;
+  }
+
+  /** (Re)builds a creature's model from its kit. */
+  private dress(view: MobView): void {
+    const kit = this.kit(view.kind, view.variant, view.flags);
+    view.model.clear();
+    view.pose = new Map();
+    view.roles = [];
+    view.lookKey = this.lookKey(view.kind, view.variant, view.flags);
+    if (!kit) return;
+    let i = 0;
+    const add = (b: Bone, parent: THREE.Object3D, parentPivot: [number, number, number]) => {
+      const g = new THREE.Group();
+      g.position.set((b.pivot[0] - parentPivot[0]) * PX, (b.pivot[1] - parentPivot[1]) * PX, (b.pivot[2] - parentPivot[2]) * PX);
+      const rest: [number, number, number] = b.rot ?? [0, 0, 0];
+      g.rotation.set(rest[0], rest[1], rest[2]);
+      for (const bx of b.boxes) {
+        const mesh = new THREE.Mesh(kit.geometries[i++], bx.glow ? kit.glow : view.material);
+        mesh.position.set((bx.at[0] - b.pivot[0]) * PX, (bx.at[1] - b.pivot[1]) * PX, (bx.at[2] - b.pivot[2]) * PX);
+        g.add(mesh);
+      }
+      parent.add(g);
+      view.pose.set(b.name, { obj: g, rest, base: [g.position.x, g.position.y, g.position.z] });
+      if (b.role) view.roles.push({ obj: g, role: b.role });
+      for (const ch of b.children ?? []) add(ch, g, b.pivot);
+    };
+    for (const b of kit.rig.bones) add(b, view.model, [0, 0, 0]);
+    view.model.scale.setScalar(kit.rig.scale);
+    view.material.map = kit.texture;
   }
 
   spawn(e: EntityInfo): void {
@@ -366,36 +414,30 @@ export class MobRenderer {
     }
     if (e.kind !== 'mob') return;
     this.remove(e.id);
-    const kit = this.kit(e.mob, e.variant ?? 0);
-    if (!kit) return;
-    const parts = this.partsFor(e.mob, e.variant ?? 0)!;
-    const material = new THREE.MeshBasicMaterial({ map: kit.texture, vertexColors: true });
+    if (!SPECIES[e.mob] && !MODELS[e.mob]) return;
     const root = new THREE.Group();
     const model = new THREE.Group();
     root.add(model);
     const view: MobView = {
-      kind: e.mob, root, model, parts: [], material, x: e.x, y: e.y, z: e.z, yaw: e.yaw,
-      tx: e.x, ty: e.y, tz: e.z, tyaw: e.yaw, anim: 0, walk: Math.random() * 6, hurt: 0, dying: 0,
+      kind: e.mob, variant: e.variant ?? 0, flags: e.flags ?? 0, lookKey: '', root, model, pose: new Map(), roles: [],
+      material: new THREE.MeshBasicMaterial({ vertexColors: true }),
+      x: e.x, y: e.y, z: e.z, yaw: e.yaw, tx: e.x, ty: e.y, tz: e.z, tyaw: e.yaw, anim: 0, walk: Math.random() * 6, vy: 0,
+      seed: Math.random(), hurt: 0, dying: 0,
     };
-    parts.forEach((p, i) => {
-      const mesh = new THREE.Mesh(kit.geometries[i], p.glow ? kit.glow : material);
-      if (p.role === 'legA' || p.role === 'legB' || p.role === 'arm') {
-        // Swing from the top of the limb.
-        const pivot = new THREE.Group();
-        pivot.position.set(p.at[0] * PX, (p.at[1] + p.size[1] / 2) * PX, p.at[2] * PX);
-        mesh.position.y = (-p.size[1] / 2) * PX;
-        pivot.add(mesh);
-        model.add(pivot);
-        view.parts.push({ obj: pivot, role: p.role });
-      } else {
-        mesh.position.set(p.at[0] * PX, p.at[1] * PX, p.at[2] * PX);
-        model.add(mesh);
-        view.parts.push({ obj: mesh, role: p.role });
-      }
-    });
+    this.dress(view);
     root.position.set(e.x, e.y, e.z);
     this.scene.add(root);
     this.mobs.set(e.id, view);
+  }
+
+  /** Flags / look changed (sheared, tamed, grown up, saddled, sitting…). */
+  state(e: EntityInfo): void {
+    if (e.kind !== 'mob') return;
+    const m = this.mobs.get(e.id);
+    if (!m) return;
+    m.variant = e.variant ?? 0;
+    m.flags = e.flags ?? 0;
+    if (this.lookKey(m.kind, m.variant, m.flags) !== m.lookKey) this.dress(m);
   }
 
   move(data: number[]): void {
@@ -410,27 +452,32 @@ export class MobRenderer {
     }
   }
 
-  event(id: number, event: 'hurt' | 'death' | 'spores'): void {
+  setRidden(id: number | null, at?: () => { x: number; y: number; z: number; yaw: number }): void {
+    this.ridden = id !== null && at ? { id, at } : null;
+  }
+
+  event(id: number, event: MobEventName): void {
     const m = this.mobs.get(id);
     if (!m) return;
     if (event === 'hurt') m.hurt = 0.35;
     else if (event === 'death') m.dying = 0.001;
-    else this.sporeCloud(m.x, m.y + 0.8, m.z);
+    const puff = PUFFS[event];
+    if (puff) this.puff(m.x, m.y + (event === 'spores' ? 0.8 : 1), m.z, puff);
   }
 
-  private sporeCloud(x: number, y: number, z: number): void {
+  private puff(x: number, y: number, z: number, o: NonNullable<(typeof PUFFS)[MobEventName]>): void {
     const pos: number[] = [];
-    for (let i = 0; i < 160; i++) {
+    for (let i = 0; i < o.count; i++) {
       const a = Math.random() * Math.PI * 2;
-      const r = Math.random() * 1.2;
-      pos.push(Math.cos(a) * r, (Math.random() - 0.3) * 1.2, Math.sin(a) * r);
+      const r = Math.random() * (o.count > 50 ? 1.2 : 0.45);
+      pos.push(Math.cos(a) * r, (Math.random() - 0.3) * (o.count > 50 ? 1.2 : 0.5), Math.sin(a) * r);
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    const points = new THREE.Points(g, new THREE.PointsMaterial({ color: new THREE.Color(0.45, 0.9, 0.7), size: 0.22, transparent: true, depthWrite: false }));
+    const points = new THREE.Points(g, new THREE.PointsMaterial({ color: o.color, size: o.size, transparent: true, depthWrite: false }));
     points.position.set(x, y, z);
     this.scene.add(points);
-    this.clouds.push({ points, t: 0 });
+    this.puffs.push({ points, t: 0, life: o.life, rise: o.rise, grow: o.grow });
   }
 
   remove(id: number): void {
@@ -448,12 +495,19 @@ export class MobRenderer {
   }
 
   removeInChunk(cx: number, cz: number): void {
-    for (const [id, m] of this.mobs) if (Math.floor(m.x) >> 4 === cx && Math.floor(m.z) >> 4 === cz) this.remove(id);
+    for (const [id, m] of this.mobs) {
+      if (this.ridden?.id === id) continue;
+      if (Math.floor(m.x) >> 4 === cx && Math.floor(m.z) >> 4 === cz) this.remove(id);
+    }
   }
 
   position(id: number): { x: number; y: number; z: number } | null {
     const m = this.mobs.get(id);
     return m ? { x: m.x, y: m.y, z: m.z } : null;
+  }
+
+  kindOf(id: number): number | null {
+    return this.mobs.get(id)?.kind ?? null;
   }
 
   isHostile(id: number): boolean {
@@ -462,23 +516,24 @@ export class MobRenderer {
   }
 
   /** A random living creature within r (for ambient sounds). */
-  randomNear(x: number, y: number, z: number, r: number): { x: number; y: number; z: number; hostile: boolean } | null {
-    const list = [...this.mobs.values()].filter((m) => m.dying === 0 && Math.hypot(m.x - x, m.y - y, m.z - z) < r);
+  randomNear(x: number, y: number, z: number, r: number): { x: number; y: number; z: number; hostile: boolean; kind: number } | null {
+    const list = [...this.mobs.values()].filter((m) => m.dying === 0 && Math.hypot(m.x - x, m.y - y, m.z - z) < r && !(m.anim & MobAnim.SLEEP));
     if (list.length === 0) return null;
     const m = list[Math.floor(Math.random() * list.length)];
-    return { x: m.x, y: m.y, z: m.z, hostile: !!mobDef(m.kind)?.hostile };
+    return { x: m.x, y: m.y, z: m.z, hostile: !!mobDef(m.kind)?.hostile, kind: m.kind };
   }
 
-  /** Nearest living creature hit by the ray within maxDist. */
+  /** Nearest living creature hit by the ray within maxDist (the one being ridden is skipped). */
   pick(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number): { id: number; distance: number } | null {
     this.ray.set(origin, dir);
     let best: { id: number; distance: number } | null = null;
     for (const [id, m] of this.mobs) {
-      if (m.dying > 0) continue;
+      if (m.dying > 0 || this.ridden?.id === id) continue;
       const def = mobDef(m.kind)!;
-      const h = def.width / 2;
+      const s = m.flags & MobFlag.BABY ? BABY_SCALE : 1;
+      const h = (def.width * s) / 2;
       this.hitBox.min.set(m.x - h, m.y, m.z - h);
-      this.hitBox.max.set(m.x + h, m.y + def.height, m.z + h);
+      this.hitBox.max.set(m.x + h, m.y + def.height * s, m.z + h);
       if (!this.ray.intersectBox(this.hitBox, this.hitPoint)) continue;
       const d = this.hitPoint.distanceTo(origin);
       if (d <= maxDist && (!best || d < best.distance)) best = { id, distance: d };
@@ -488,28 +543,48 @@ export class MobRenderer {
 
   update(dt: number, daylight: number): void {
     const k = Math.min(1, dt * 10);
+    const now = performance.now() / 1000;
     for (const [id, m] of this.mobs) {
       const px = m.x;
+      const py = m.y;
       const pz = m.z;
-      m.x += (m.tx - m.x) * k;
-      m.y += (m.ty - m.y) * k;
-      m.z += (m.tz - m.z) * k;
-      let dy = m.tyaw - m.yaw;
-      dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-      m.yaw += dy * k;
+      if (this.ridden?.id === id) {
+        const at = this.ridden.at();
+        m.x = at.x;
+        m.y = at.y;
+        m.z = at.z;
+        m.yaw = at.yaw;
+      } else {
+        m.x += (m.tx - m.x) * k;
+        m.y += (m.ty - m.y) * k;
+        m.z += (m.tz - m.z) * k;
+        let dy = m.tyaw - m.yaw;
+        dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+        m.yaw += dy * k;
+      }
       m.root.position.set(m.x, m.y, m.z);
       m.root.rotation.y = m.yaw;
 
-      const speed = Math.hypot(m.x - px, m.z - pz) / Math.max(dt, 1e-3);
-      m.walk += dt * Math.min(speed, 6) * 3;
-      const swing = Math.sin(m.walk) * Math.min(1, speed / 2) * 0.7;
-      const attacking = (m.anim & 1) !== 0;
-      const fuse = (m.anim & 2) !== 0;
-      for (const p of m.parts) {
-        if (p.role === 'legA') p.obj.rotation.x = swing;
-        else if (p.role === 'legB') p.obj.rotation.x = -swing;
-        else if (p.role === 'arm') p.obj.rotation.x = -1.35 + (attacking ? Math.sin(performance.now() / 60) * 0.4 : swing * 0.2);
-        else if (p.role === 'cap') p.obj.scale.setScalar(fuse ? 1 + Math.abs(Math.sin(performance.now() / 90)) * 0.15 : 1);
+      const forced = this.motion.get(id);
+      const speed = forced ? forced.speed : Math.hypot(m.x - px, m.z - pz) / Math.max(dt, 1e-3);
+      m.vy += ((m.y - py) / Math.max(dt, 1e-3) - m.vy) * Math.min(1, dt * 12);
+      if (forced) m.vy = forced.vy;
+      const babyStep = m.flags & MobFlag.BABY ? 1.5 : 1;
+      m.walk += dt * Math.min(speed, 10) * 3 * babyStep;
+      const species = SPECIES[m.kind];
+      if (species) {
+        const s: AnimState = { t: now, dt, walk: m.walk, speed, vy: m.vy, anim: m.anim, flags: m.flags, seed: m.seed };
+        species.animate(m.pose, s);
+      } else {
+        const swing = Math.sin(m.walk) * Math.min(1, speed / 2) * 0.7;
+        const attacking = (m.anim & MobAnim.ATTACK) !== 0;
+        const fuse = (m.anim & MobAnim.FUSE) !== 0;
+        for (const p of m.roles) {
+          if (p.role === 'legA') p.obj.rotation.x = swing;
+          else if (p.role === 'legB') p.obj.rotation.x = -swing;
+          else if (p.role === 'arm') p.obj.rotation.x = -1.35 + (attacking ? Math.sin(performance.now() / 60) * 0.4 : swing * 0.2);
+          else if (p.role === 'cap') p.obj.scale.setScalar(fuse ? 1 + Math.abs(Math.sin(performance.now() / 90)) * 0.15 : 1);
+        }
       }
 
       if (m.dying > 0) {
@@ -520,6 +595,7 @@ export class MobRenderer {
       m.hurt = Math.max(0, m.hurt - dt);
       const l = this.world.getLight(Math.floor(m.x), Math.floor(m.y + 0.5), Math.floor(m.z));
       const b = Math.max(0.1, Math.pow(0.8, 15 - (l >> 4)) * daylight, Math.pow(0.8, 15 - (l & 15)));
+      const fuse = (m.anim & MobAnim.FUSE) !== 0;
       if (m.hurt > 0 || m.dying > 0) m.material.color.setRGB(Math.min(1, b * 1.6), b * 0.35, b * 0.35);
       else if (fuse && Math.floor(performance.now() / 150) % 2 === 0) m.material.color.setRGB(Math.min(1, b * 1.5), Math.min(1, b * 1.5), Math.min(1, b * 1.5));
       else m.material.color.setRGB(b, b, b);
@@ -535,16 +611,17 @@ export class MobRenderer {
       if (t.t > 3) this.remove(id);
     }
 
-    for (let i = this.clouds.length - 1; i >= 0; i--) {
-      const c = this.clouds[i];
+    for (let i = this.puffs.length - 1; i >= 0; i--) {
+      const c = this.puffs[i];
       c.t += dt;
-      c.points.scale.setScalar(1 + c.t * 2.5);
-      (c.points.material as THREE.PointsMaterial).opacity = Math.max(0, 1 - c.t / 1.4);
-      if (c.t > 1.4) {
+      c.points.scale.setScalar(1 + c.t * c.grow);
+      c.points.position.y += c.rise * dt;
+      (c.points.material as THREE.PointsMaterial).opacity = Math.max(0, 1 - c.t / c.life);
+      if (c.t > c.life) {
         this.scene.remove(c.points);
         c.points.geometry.dispose();
         (c.points.material as THREE.Material).dispose();
-        this.clouds.splice(i, 1);
+        this.puffs.splice(i, 1);
       }
     }
   }
@@ -561,3 +638,6 @@ export class MobRenderer {
     this.thornGeometry.dispose();
   }
 }
+
+/** For the creature gallery: a rig's skins + geometries, without a renderer. */
+export { buildKit as buildCreatureKit, partsRig, MODELS as MONSTER_MODELS, ROBE, ROBE_COLORS };

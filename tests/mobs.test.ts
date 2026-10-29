@@ -5,6 +5,7 @@ import { HOSTILE_MOBS, Mob, pickSpawnKind } from '../src/shared/entities/mobs';
 import { I, toolId } from '../src/shared/items/registry';
 import type { ClientMsg, ServerMsg } from '../src/shared/protocol/messages';
 import { Chunk } from '../src/shared/world/Chunk';
+import { Biome } from '../src/shared/world/biomes';
 import { computeChunkLight } from '../src/shared/world/lighting';
 import { createLocalPair } from '../src/net/LocalTransport';
 import { GameServer } from '../src/server/GameServer';
@@ -46,6 +47,7 @@ describe('pathfinding', () => {
 function flatChunk(cx: number, cz: number): Chunk {
   const c = new Chunk(cx, cz);
   for (let i = 0; i < 10 * 256; i++) c.blocks[i] = i >= 9 * 256 ? B.GRASS : B.STONE;
+  c.biomes.fill(Biome.PLAINS);
   c.recomputeHeights();
   computeChunkLight(c);
   return c;
@@ -126,7 +128,7 @@ describe('creatures on the host', () => {
 
   it('takes hits with knockback, flees, and drops its loot when killed', async () => {
     const { server, session, send, tick } = await setup();
-    const m = server.mobs.spawn(Mob.GRAZER, 2.5, 10, 0.5)!;
+    const m = server.mobs.spawn(Mob.SHEEP, 2.5, 10, 0.5)!;
     session.inventory.slots[0] = { id: toolId(2, 3), count: 1 }; // iron sword, 6 damage
     await send({ t: 'attack', entityId: m.id });
     expect(m.health).toBe(2);
@@ -181,9 +183,9 @@ describe('creatures on the host', () => {
     expect(m.health).toBeLessThan(20);
   });
 
-  it('removes creatures far from every player', async () => {
+  it('removes monsters far from every player', async () => {
     const { server, tick } = await setup();
-    const m = server.mobs.spawn(Mob.TUSKLING, 200.5, 10, 0.5)!;
+    const m = server.mobs.spawn(Mob.GLOOMWALKER, 200.5, 10, 0.5)!;
     await tick(1);
     expect(server.mobs.mobs.has(m.id)).toBe(false);
   });

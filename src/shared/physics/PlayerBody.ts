@@ -70,6 +70,11 @@ export class PlayerBody {
   climber = false;
   /** Set when the body bounced off a bed (cleared by whoever reports it). */
   bounced = false;
+  jumpVelocity = JUMP_VELOCITY;
+  /** Flutters down slowly (chickens). */
+  slowFall = false;
+  /** Eye height while riding (sits higher). */
+  eyeOverride: number | null = null;
 
   box(x = this.x, y = this.y, z = this.z): { min: number[]; max: number[] } {
     const h = this.width / 2;
@@ -85,6 +90,7 @@ export class PlayerBody {
   }
 
   get eyeHeight(): number {
+    if (this.eyeOverride !== null) return this.eyeOverride;
     return this.sneaking && !this.flying ? SNEAK_EYE_HEIGHT : EYE_HEIGHT;
   }
 
@@ -144,8 +150,8 @@ export class PlayerBody {
     } else if (this.climber && this.horizontalCollision && input.forward > 0) {
       this.vy = 3;
     } else {
-      if (input.jump && this.onGround) this.vy = JUMP_VELOCITY;
-      this.vy = Math.max(this.vy - GRAVITY * dt, -TERMINAL);
+      if (input.jump && this.onGround) this.vy = this.jumpVelocity;
+      this.vy = Math.max(this.vy - GRAVITY * dt, this.slowFall ? -3 : -TERMINAL);
     }
 
     let dx = this.vx * dt;

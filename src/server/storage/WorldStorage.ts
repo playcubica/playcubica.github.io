@@ -1,4 +1,5 @@
 import { GameMode } from '../../shared/constants';
+import type { SavedMob } from '../../shared/entities/mobs';
 import type { InventoryState } from '../../shared/items/Inventory';
 import type { Vec3 } from '../../shared/protocol/messages';
 import { decodeChunk } from '../../shared/world/chunkCodec';
@@ -41,6 +42,10 @@ export interface WorldMeta {
   inviteCode?: string;
   /** Firebase uid of whoever first saved the world to the cloud (only they can delete it there). */
   owner?: string;
+  /** Animals by chunk key "cx,cz" (they come back when their chunk loads). */
+  creatures?: Record<string, SavedMob[]>;
+  /** Settlement centres ("x,z") that already got their cats. */
+  catsAt?: string[];
 }
 
 /** Minimal persistence interface the server needs (lets tests run without IndexedDB). */

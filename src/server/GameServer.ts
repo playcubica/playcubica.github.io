@@ -22,8 +22,8 @@ import { canLandIn, FallingBlocks } from './FallingBlocks';
 import { WaterSim } from './water';
 import { settlementsTouching } from './worldgen/settlements';
 import { TRADES, type Trade } from '../shared/entities/trades';
-import { MobManager, type MobTarget } from './mobs/MobManager';
-import { Mob, mobDef, PLAYER_ATTACK_COOLDOWN, PLAYER_ATTACK_REACH } from '../shared/entities/mobs';
+import { MobManager, type MobEntity, type MobTarget } from './mobs/MobManager';
+import { GROW_TICKS, Mob, MobFlag, mobDef, PLAYER_ATTACK_COOLDOWN, PLAYER_ATTACK_REACH, type SavedMob } from '../shared/entities/mobs';
 import { MAX_AIR, MAX_FOOD, MAX_HEALTH, PlayerSession, type OpenWindow } from './PlayerSession';
 import { WorldGenerator } from './worldgen/WorldGenerator';
 import { ashwoodTree, frostpineTree, TREE_HEIGHT } from './worldgen/trees';
@@ -122,6 +122,8 @@ export class GameServer {
   /** Pressure plates currently pressed, by "x,y,z". */
   private readonly pressedPlates = new Map<string, Vec3>();
   private readonly players = new Map<number, PlayerSession>();
+  /** Saved animals whose chunk isn't loaded, by chunk key. */
+  private readonly dormant = new Map<string, SavedMob[]>();
   /** Furnaces that are burning or have work queued, by "x,y,z". */
   private readonly furnaces = new Map<string, Vec3>();
   /** Players looking into a chest/furnace, by "x,y,z". */
@@ -173,7 +175,22 @@ export class GameServer {
       },
       event: (id, event, x, z) => this.toChunkViewers(x, z, { t: 'entityEvent', id, event }),
       drops: (items, x, y, z) => this.items.spawnDrops(items, x, y, z),
+      state: (info) => {
+        this.toChunkViewers(info.x, info.z, { t: 'mobState', entity: info });
+        // A rider learns at once when the mount accepts them (or gets a saddle).
+        const m = this.mobs.mobs.get(info.id);
+        const rider = m && m.riderId !== null ? this.players.get(m.riderId) : undefined;
+        if (m && rider) this.sendRide(rider, m);
+      },
+      setBlock: (x, y, z, id) => this.setBlockAndBroadcast(x, y, z, id),
+      dismounted: (riderId) => {
+        const p = this.players.get(riderId);
+        if (!p || p.riding === null) return;
+        p.riding = null;
+        p.send({ t: 'ride', entityId: null });
+      },
     });
+    for (const [key, list] of Object.entries(this.meta.creatures ?? {})) if (Array.isArray(list)) this.dormant.set(key, list);
     this.items = new ItemEntities(this.world, allocId, {
       spawned: (e) => this.toChunkViewers(e.x, e.z, { t: 'entitySpawn', entity: ItemEntities.info(e) }),
       despawned: (e, pickedBy) => this.broadcast({ t: 'entityDespawn', id: e.id, pickedBy }),
@@ -277,6 +294,7 @@ export class GameServer {
     transport.onClose = () => {
       session.closed = true;
       if (!this.players.has(session.id)) return;
+      this.stopRiding(session);
       this.players.delete(session.id);
       if (session.joined) {
         this.closeWindows(session);
@@ -383,6 +401,9 @@ export class GameServer {
         break;
       case 'interact':
         this.interact(p, msg.entityId | 0);
+        break;
+      case 'dismount':
+        this.stopRiding(p);
         break;
       case 'trade':
         this.trade(p, msg.entityId | 0, msg.offer | 0);
@@ -560,7 +581,9 @@ export class GameServer {
     // faster is pulled back to its last accepted position.
     const dt = Math.min(1, Math.max(0.05, (now - p.lastMoveAt) / 1000));
     const fly = p.creative && (flags & MoveFlag.FLYING) !== 0;
-    const maxH = (fly ? 24 : 8) * dt + 1.5;
+    const mount = p.riding !== null ? this.mobs.mobs.get(p.riding) : undefined;
+    if (p.riding !== null && (!mount || mount.riderId !== p.id)) this.stopRiding(p);
+    const maxH = (fly ? 24 : mount ? 14 : 8) * dt + 1.5;
     const maxUp = (fly ? 20 : 10) * dt + 1.5;
     if (Math.hypot(x - ox, z - oz) > maxH || y - oy > maxUp) {
       p.violations++;
@@ -603,6 +626,11 @@ export class GameServer {
     p.pos = [x, y, z];
     p.yaw = yaw;
     p.pitch = pitch;
+    if (mount && mount.riderId === p.id) {
+      // The mount takes the falls; the rider just goes along.
+      this.mobs.carry(mount, x, y, z, yaw);
+      p.fallStartY = y;
+    }
   }
 
   private tickPlayer(p: PlayerSession): void {
@@ -652,16 +680,20 @@ export class GameServer {
   private mobTargets(): MobTarget[] {
     return [...this.players.values()].filter((p) => p.joined).map((p) => ({
       id: p.id,
+      key: p.saveKey,
+      name: p.name,
       pos: p.pos,
       alive: p.alive,
       creative: p.creative,
-      hurt: (amount: number, cause: string, from: readonly number[]) => {
+      sneaking: p.sneaking,
+      held: p.inventory.held?.id ?? 0,
+      hurt: (amount: number, cause: string, from: readonly number[], push = 1) => {
         if (p.hurtCooldown > 0 || !p.alive || p.creative) return;
         p.hurtCooldown = 10;
         const dx = p.pos[0] - from[0];
         const dz = p.pos[2] - from[2];
         const len = Math.hypot(dx, dz) || 1;
-        p.send({ t: 'knockback', vx: (dx / len) * 7, vy: 5, vz: (dz / len) * 7 });
+        if (p.riding === null) p.send({ t: 'knockback', vx: (dx / len) * 7 * push, vy: 5 * Math.min(push, 1.5), vz: (dz / len) * 7 * push });
         this.damage(p, amount, cause);
       },
     }));
@@ -671,7 +703,7 @@ export class GameServer {
     const now = performance.now();
     if (now - p.lastAttackAt < PLAYER_ATTACK_COOLDOWN * 1000 * TIME_TOLERANCE) return;
     const m = this.mobs.mobs.get(mobId);
-    if (!m) return;
+    if (!m || m.riderId === p.id) return;
     const b = m.body;
     const ex = p.pos[0];
     const ey = p.pos[1] + EYE_HEIGHT;
@@ -687,7 +719,8 @@ export class GameServer {
     const tool = held ? itemDef(held.id)?.tool : undefined;
     const base = !tool ? 1 : tool.kind === 'sword' ? tool.damage : tool.kind === 'axe' ? tool.damage - 1 : 2;
     const dmg = base + runeLevel(held, RUNE_KEEN);
-    if (!this.mobs.hit(mobId, dmg, p.pos)) return;
+    if (!this.mobs.hit(mobId, dmg, p.pos, { player: p.id, playerKey: p.saveKey })) return;
+    this.mobs.ownerAttacks(p.saveKey, mobId);
     p.addExhaustion(0.1);
     if (tool) this.wearTool(p, tool.kind === 'sword' ? 1 : 2);
   }
@@ -702,7 +735,64 @@ export class GameServer {
 
   private interact(p: PlayerSession, id: number): void {
     const t = this.traderFor(p, id);
-    if (t) p.send({ t: 'trades', entityId: id, profession: t.profession, offers: t.offers });
+    if (t) {
+      p.send({ t: 'trades', entityId: id, profession: t.profession, offers: t.offers });
+      return;
+    }
+    const m = this.mobs.mobs.get(id);
+    if (!m || p.dead || p.riding !== null) return;
+    const b = m.body;
+    if (Math.hypot(b.x - p.pos[0], b.y - p.pos[1], b.z - p.pos[2]) > PLAYER_ATTACK_REACH + REACH_SLACK + b.width) return;
+    const inv = p.inventory;
+    const held = inv.held;
+    const result = this.mobs.interact(m, { id: p.id, key: p.saveKey, name: p.name, pos: p.pos, held, creative: p.creative });
+    if (!result) return;
+    p.swingUntil = performance.now() + 300;
+    switch (result.kind) {
+      case 'consume':
+        if (!p.creative) inv.take(inv.selected, 1);
+        break;
+      case 'replace':
+        // A bucket of milk: the stack shrinks by one and the milk goes in the hand (or the pack).
+        if (held && held.count > 1) {
+          inv.take(inv.selected, 1);
+          if (inv.addStack(result.stack) > 0) this.throwItem(p, result.stack);
+        } else {
+          inv.slots[inv.selected] = { ...result.stack };
+        }
+        break;
+      case 'give':
+        this.items.spawnDrops(result.items, Math.floor(b.x), Math.floor(b.y + b.height / 2), Math.floor(b.z));
+        break;
+      case 'ride':
+        this.startRiding(p, m);
+        break;
+    }
+    p.sendInventory();
+  }
+
+  private startRiding(p: PlayerSession, m: MobEntity): void {
+    p.riding = m.id;
+    this.teleport(p, [m.body.x, m.body.y, m.body.z]);
+    this.sendRide(p, m);
+  }
+
+  private sendRide(p: PlayerSession, m: MobEntity): void {
+    const ride = m.def.animal?.ride;
+    p.send({
+      t: 'ride', entityId: m.id, speed: ride?.speed ?? m.def.speed, jump: ride?.jump ?? 8.4, steer: MobManager.steerable(m),
+      width: m.body.width, height: m.body.height + 0.9,
+    });
+  }
+
+  private stopRiding(p: PlayerSession): void {
+    if (p.riding === null) return;
+    const m = this.mobs.mobs.get(p.riding);
+    if (m && m.riderId === p.id) this.mobs.dismount(m);
+    else {
+      p.riding = null;
+      p.send({ t: 'ride', entityId: null });
+    }
   }
 
   private trade(p: PlayerSession, id: number, offer: number): void {
@@ -739,6 +829,7 @@ export class GameServer {
   }
 
   private die(p: PlayerSession, cause: string): void {
+    this.stopRiding(p);
     p.dead = true;
     p.health = 0;
     p.eating = null;
@@ -1033,6 +1124,7 @@ export class GameServer {
 
   /** Moves a player through a rift to the matching place in the other world, building a rift there if needed. */
   private async travel(p: PlayerSession): Promise<void> {
+    this.stopRiding(p);
     p.travelling = true;
     p.riftTicks = 0;
     try {
@@ -1159,13 +1251,45 @@ export class GameServer {
         break;
       }
       case 'summon': {
+        // /summon <kind> [baby] [variant] [count]
         const def = Object.values(Mob).map((k) => mobDef(k)!).find((d) => d.key === args[0] || d.name === args[0]);
         if (!p.isHost || !def) {
           this.chat(p, p.isHost ? `יצורים: ${Object.values(Mob).map((k) => mobDef(k)!.key).join(', ')}` : 'רק המארח יכול לזמן יצורים.');
           break;
         }
-        const d = 3;
-        this.mobs.spawn(def.kind, p.pos[0] - Math.sin(p.yaw) * d, p.pos[1] + 0.5, p.pos[2] - Math.cos(p.yaw) * d);
+        const rest = args.slice(1);
+        const baby = rest.includes('baby');
+        const nums = rest.filter((a) => /^\d+$/.test(a)).map(Number);
+        const count = Math.min(16, nums[1] ?? 1);
+        for (let i = 0; i < count; i++) {
+          const d = 3 + i * 1.2;
+          this.mobs.spawn(def.kind, p.pos[0] - Math.sin(p.yaw) * d, p.pos[1] + 0.5, p.pos[2] - Math.cos(p.yaw) * d, { baby, variant: nums[0] });
+        }
+        break;
+      }
+      case 'mobinfo': {
+        // The nearest creature's state (for testing).
+        let best: MobEntity | null = null;
+        for (const m of this.mobs.mobs.values()) {
+          if (!best || Math.hypot(m.body.x - p.pos[0], m.body.z - p.pos[2]) < Math.hypot(best.body.x - p.pos[0], best.body.z - p.pos[2])) best = m;
+        }
+        if (!best) {
+          this.chat(p, 'אין יצורים בסביבה.');
+          break;
+        }
+        const names = Object.entries(MobFlag).filter(([, bit]) => best!.flags & bit).map(([n]) => n.toLowerCase());
+        this.chat(p, `${best.def.name} #${best.id}: ${best.health}/${best.def.health} ❤ variant ${best.variant ?? '-'} ${names.join(' ')}` +
+          `${best.owner ? ` owner ${best.ownerName}` : ''}${best.flags & MobFlag.BABY ? ` age ${best.age}` : ''} temper ${best.temper}`);
+        break;
+      }
+      case 'grow': {
+        if (!p.isHost) break;
+        for (const m of this.mobs.mobs.values()) {
+          if (Math.hypot(m.body.x - p.pos[0], m.body.z - p.pos[2]) < 16) {
+            m.age = GROW_TICKS - 1;
+            m.breedCooldown = 0;
+          }
+        }
         break;
       }
       case 'list':
@@ -1202,6 +1326,7 @@ export class GameServer {
     p.food = Math.min(MAX_FOOD, p.food + food.hunger);
     p.saturation = Math.min(p.food, p.saturation + food.saturation);
     p.inventory.take(slot, 1);
+    if (held!.id === I.MILK_BUCKET && p.inventory.addStack({ id: I.BUCKET, count: 1 }) > 0) this.throwItem(p, { id: I.BUCKET, count: 1 });
     p.sendInventory();
     p.sendStats(true);
   }
@@ -1361,6 +1486,13 @@ export class GameServer {
   }
 
   private chunkLoaded(c: Chunk): void {
+    // Animals saved with this chunk come back.
+    const key = chunkKey(c.cx, c.cz);
+    const saved = this.dormant.get(key);
+    if (saved) {
+      this.dormant.delete(key);
+      for (const s of saved) this.mobs.restore(s);
+    }
     // Settlement centres in this chunk get their traders (they aren't saved; they return with the chunk).
     if (!isDeep(c.cx * 16)) {
       for (const st of settlementsTouching(this.generator, c.cx * 16, c.cz * 16, c.cx * 16 + 15, c.cz * 16 + 15)) {
@@ -1368,6 +1500,13 @@ export class GameServer {
         for (let i = 0; i < 3; i++) {
           const a = (i / 3) * Math.PI * 2;
           this.mobs.spawn(Mob.TRADER, st.x + 0.5 + Math.cos(a) * 3, st.y + 1, st.z + 0.5 + Math.sin(a) * 3, { variant: i, home: [st.x + 0.5, st.z + 0.5] });
+        }
+        // Stray cats live in settlements (once; after that they are saved like any animal).
+        const at = `${st.x},${st.z}`;
+        const cats = (this.meta.catsAt ??= []);
+        if (!cats.includes(at)) {
+          cats.push(at);
+          for (let i = 0; i < 1 + Math.floor(Math.random() * 2); i++) this.mobs.spawn(Mob.CAT, st.x + 0.5 + (i ? -2 : 2), st.y + 1, st.z + 2.5);
         }
       }
     }
@@ -1635,7 +1774,7 @@ export class GameServer {
       z: q.pos[2],
       yaw: q.yaw,
       pitch: q.pitch,
-      anim: (q.sneaking ? Anim.SNEAK : 0) | (q.swingUntil > now ? Anim.SWING : 0) | (q.flying ? Anim.FLYING : 0),
+      anim: (q.sneaking ? Anim.SNEAK : 0) | (q.swingUntil > now ? Anim.SWING : 0) | (q.flying ? Anim.FLYING : 0) | (q.riding !== null ? Anim.RIDING : 0),
     }));
     if (states.length < 2) return;
     for (const p of this.players.values()) {
@@ -1688,8 +1827,8 @@ export class GameServer {
     const centers = [...this.players.values()].map((p) => [Math.floor(p.pos[0] / 16), Math.floor(p.pos[2] / 16), (this.radiusOf(p) + 2) ** 2]);
     const keep = (cx: number, cz: number) => centers.some(([px, pz, r2]) => (cx - px) ** 2 + (cz - pz) ** 2 <= r2);
     const unsaved = this.world.unloadWhere(keep);
-    // Creatures and items on unloaded ground vanish (they are not saved).
-    this.mobs.removeWhere((x, z) => !keep(Math.floor(x) >> 4, Math.floor(z) >> 4));
+    // Animals on unloaded ground are kept for when it loads again; monsters and items vanish.
+    for (const s of this.mobs.removeWhere((x, z) => !keep(Math.floor(x) >> 4, Math.floor(z) >> 4))) this.keepDormant(s);
     for (const e of [...this.items.all.values()]) {
       if (!keep(Math.floor(e.x) >> 4, Math.floor(e.z) >> 4)) {
         this.items.all.delete(e.id);
@@ -1705,12 +1844,28 @@ export class GameServer {
     }
   }
 
+  private keepDormant(s: SavedMob): void {
+    const key = chunkKey(Math.floor(s.x) >> 4, Math.floor(s.z) >> 4);
+    const list = this.dormant.get(key) ?? [];
+    list.push(s);
+    this.dormant.set(key, list);
+  }
+
+  /** Every animal: loaded ones as they are now plus the dormant ones, by chunk. */
+  private creatureSaves(): Record<string, SavedMob[]> {
+    const out: Record<string, SavedMob[]> = {};
+    for (const [key, list] of this.dormant) out[key] = [...list];
+    for (const s of this.mobs.saveAll()) (out[chunkKey(Math.floor(s.x) >> 4, Math.floor(s.z) >> 4)] ??= []).push(s);
+    return out;
+  }
+
   /** Writes changed chunks, players and world time. Saves are serialized. */
   save(): Promise<void> {
     const store = this.options.store;
     if (!store) return Promise.resolve();
     const chunks = this.world.takeModified();
     for (const p of this.players.values()) if (p.joined) this.meta.players[p.saveKey] = p.save();
+    this.meta.creatures = this.creatureSaves();
     this.meta.time = this.time;
     this.meta.lastPlayed = Date.now();
     const meta: WorldMeta = JSON.parse(JSON.stringify(this.meta));

@@ -25,7 +25,8 @@ import { setIconAtlas } from './ui/icons';
 import { EntityRenderer } from './render/EntityRenderer';
 import { PlayerModels } from './render/PlayerModels';
 import { MobRenderer } from './render/MobRenderer';
-import { AudioEngine, materialOf } from './audio/AudioEngine';
+import { AudioEngine, materialOf, type SoundName } from './audio/AudioEngine';
+import { Mob } from '../shared/entities/mobs';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { TradeScreen } from './ui/TradeScreen';
 import { isDeep } from '../shared/world/dimensions';
@@ -62,6 +63,11 @@ type UiState = 'loading' | 'playing' | 'paused' | 'window' | 'chat' | 'resuming'
 
 /** A remote host that stays silent this long is considered gone. */
 const HOST_TIMEOUT_MS = 20_000;
+/** Each animal's own voice. */
+const VOICES: Partial<Record<number, SoundName>> = {
+  [Mob.COW]: 'moo', [Mob.SHEEP]: 'baa', [Mob.PIG]: 'oink', [Mob.CHICKEN]: 'cluck', [Mob.HORSE]: 'neigh',
+  [Mob.WOLF]: 'bark', [Mob.CAT]: 'meow', [Mob.RABBIT]: 'squeak', [Mob.FOX]: 'yip', [Mob.GOAT]: 'bleat',
+};
 
 /** Max milliseconds per frame spent decoding and lighting incoming chunks. */
 const CHUNK_BUDGET_MS = 4;
@@ -154,6 +160,7 @@ export class GameClient implements InteractionHost, WindowHost {
     this.renderer.scene.add(this.sky.group);
     this.controls = new Controls(this.renderer.canvas);
     this.player = new LocalPlayer(this.world, this.controls);
+    this.player.onDismount = () => this.send({ t: 'dismount' });
     this.interaction = new BlockInteraction(this.renderer.scene, this, this.controls);
     this.hud = new Hud(container);
     this.windowScreen = new WindowScreen(container, this);
@@ -336,6 +343,11 @@ export class GameClient implements InteractionHost, WindowHost {
     } else if (this.state === 'playing' || (this.state === 'resuming' && !this.chatInput.open)) {
       this.setState('paused');
     }
+  }
+
+  private voice(id: number): SoundName {
+    const kind = this.mobs.kindOf(id);
+    return (kind !== null && VOICES[kind]) || (this.mobs.isHostile(id) ? 'growl' : 'grunt');
   }
 
   private keyPressed(code: string): void {
@@ -631,11 +643,34 @@ export class GameClient implements InteractionHost, WindowHost {
         this.mobs.event(msg.id, msg.event);
         const at = this.mobs.position(msg.id);
         if (at) {
-          if (msg.event === 'spores') this.audio.play('spores', at);
-          else this.audio.play(this.mobs.isHostile(msg.id) ? 'growl' : 'grunt', at, 'stone', msg.event === 'death' ? 1 : 0.7);
+          const e = msg.event;
+          if (e === 'spores') this.audio.play('spores', at);
+          else if (e === 'love' || e === 'tamed' || e === 'baby') this.audio.play('pop', at);
+          else if (e === 'smoke') this.audio.play('snort', at);
+          else if (e === 'shear') this.audio.play('shear', at);
+          else this.audio.play(this.voice(msg.id), at, 'stone', e === 'death' ? 1 : 0.7);
         }
         break;
       }
+      case 'mobState':
+        this.mobs.state(msg.entity);
+        break;
+      case 'ride':
+        if (msg.entityId === null) {
+          this.player.unmount();
+          this.mobs.setRidden(null);
+        } else {
+          const b = this.player.body;
+          const before = this.player.riding;
+          this.player.mount({
+            id: msg.entityId, speed: msg.speed ?? 4, jump: msg.jump ?? 8.4, steer: !!msg.steer, width: msg.width ?? 1, height: msg.height ?? 2,
+          });
+          this.mobs.setRidden(msg.entityId, () => ({ x: b.x, y: b.y, z: b.z, yaw: this.controls.yaw }));
+          if (before?.id !== msg.entityId || before.steer !== !!msg.steer) {
+            this.hud.message(msg.steer ? 'Shift — לרדת' : before?.id === msg.entityId ? 'הסוס התרגל אליך! צריך אוכף כדי לרכוב עליו' : 'הסוס עוד לא מאולף… (Shift — לרדת)', true);
+          }
+        }
+        break;
       case 'knockback':
         this.player.body.push(msg.vx, msg.vy, msg.vz);
         break;
@@ -790,7 +825,7 @@ export class GameClient implements InteractionHost, WindowHost {
     if (now > this.nextIdleSound) {
       this.nextIdleSound = now + 4000 + Math.random() * 8000;
       const near = this.mobs.randomNear(body.x, body.y, body.z, 16);
-      if (near) this.audio.play(near.hostile ? 'growl' : 'grunt', near, 'stone', 0.5);
+      if (near) this.audio.play(VOICES[near.kind] ?? (near.hostile ? 'growl' : 'grunt'), near, 'stone', 0.5);
     }
     this.audio.setListener(cam.position.x, cam.position.y, cam.position.z, this.controls.yaw);
     this.audio.tick();

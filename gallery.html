@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cubica – גלריית יצורים</title>
+  <style>
+    body { margin: 0; background: #7fa7d9; font: 14px system-ui, sans-serif; color: #fff; overflow: hidden; }
+    #ui { position: fixed; top: 0; right: 0; bottom: 0; width: 280px; overflow-y: auto; background: rgba(20, 22, 30, 0.86); padding: 12px; box-sizing: border-box; }
+    #ui h1 { font-size: 17px; margin: 0 0 8px; }
+    #ui h2 { font-size: 13px; margin: 14px 0 6px; color: #b9c4d8; font-weight: 600; }
+    .row { display: flex; flex-wrap: wrap; gap: 4px; }
+    button { background: #39404f; color: #fff; border: 1px solid #555e70; border-radius: 4px; padding: 4px 8px; cursor: pointer; font: inherit; }
+    button.on { background: #4f7bd9; border-color: #7ea2ef; }
+    #info { white-space: pre-line; font-size: 12px; color: #d8deea; background: rgba(0,0,0,.25); padding: 6px; border-radius: 4px; }
+    #view { position: fixed; inset: 0 280px 0 0; }
+  </style>
+</head>
+<body>
+  <div id="view"></div>
+  <div id="ui">
+    <h1>גלריית יצורים</h1>
+    <div id="info"></div>
+    <h2>יצור</h2><div class="row" id="kinds"></div>
+    <h2>וריאנט</h2><div class="row" id="variants"></div>
+    <h2>מצב</h2><div class="row" id="flags"></div>
+    <h2>תנועה</h2><div class="row" id="anims"></div>
+    <h2>מבט</h2><div class="row" id="views"></div>
+    <h2>תצוגה</h2><div class="row" id="modes"></div>
+  </div>
+  <script type="module" src="/src/dev/gallery.ts"></script>
+</body>
+</html>

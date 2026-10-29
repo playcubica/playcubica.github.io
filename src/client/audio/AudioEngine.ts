@@ -6,7 +6,8 @@ import { B } from '../../shared/blocks/registry';
 
 export type SoundName =
   | 'break' | 'place' | 'step' | 'hurt' | 'death' | 'eat' | 'pickup' | 'click' | 'door'
-  | 'grunt' | 'growl' | 'thorn' | 'spores' | 'rift' | 'splash';
+  | 'grunt' | 'growl' | 'thorn' | 'spores' | 'rift' | 'splash'
+  | 'moo' | 'baa' | 'oink' | 'cluck' | 'neigh' | 'bark' | 'meow' | 'squeak' | 'yip' | 'bleat' | 'snort' | 'shear' | 'pop';
 
 type Material = 'stone' | 'wood' | 'soft' | 'glass' | 'plant' | 'sand';
 
@@ -166,6 +167,61 @@ export class AudioEngine {
         break;
       case 'splash':
         this.noiseBurst(out, t, 0.35, 900, 0.6, 0.6, 300);
+        break;
+      // Animal voices (all synthesized; pitch varies a little each time).
+      case 'moo': {
+        const f = 105 + Math.random() * 25;
+        this.tone(out, t, 'sawtooth', f, f * 1.25, 0.35, 0.18);
+        this.tone(out, t + 0.33, 'sawtooth', f * 1.25, f * 0.85, 0.7, 0.18, 3);
+        break;
+      }
+      case 'baa': {
+        const f = 330 + Math.random() * 60;
+        this.tone(out, t, 'sawtooth', f, f * 0.92, 0.55, 0.12, 22);
+        break;
+      }
+      case 'oink':
+        for (let i = 0; i < 2; i++) this.tone(out, t + i * 0.16, 'square', 210 + Math.random() * 40, 140, 0.12, 0.12, 30);
+        break;
+      case 'cluck':
+        for (let i = 0; i < 3; i++) this.tone(out, t + i * 0.09, 'square', 900 + Math.random() * 200, 600, 0.05, 0.1);
+        break;
+      case 'neigh': {
+        const f = 700 + Math.random() * 100;
+        this.tone(out, t, 'sawtooth', f, f * 1.3, 0.15, 0.12, 18);
+        this.tone(out, t + 0.15, 'sawtooth', f * 1.3, f * 0.45, 0.75, 0.12, 24);
+        break;
+      }
+      case 'bark':
+        this.tone(out, t, 'sawtooth', 520 + Math.random() * 80, 260, 0.11, 0.2);
+        this.noiseBurst(out, t, 0.08, 900, 1, 0.3);
+        break;
+      case 'meow': {
+        const f = 520 + Math.random() * 120;
+        this.tone(out, t, 'triangle', f, f * 1.45, 0.18, 0.18);
+        this.tone(out, t + 0.18, 'triangle', f * 1.45, f * 0.8, 0.32, 0.18);
+        break;
+      }
+      case 'squeak':
+        this.tone(out, t, 'sine', 1800 + Math.random() * 400, 2600, 0.07, 0.12);
+        break;
+      case 'yip':
+        this.tone(out, t, 'square', 950 + Math.random() * 150, 1400, 0.09, 0.12);
+        this.tone(out, t + 0.12, 'square', 1300, 800, 0.1, 0.1);
+        break;
+      case 'bleat': {
+        const f = 420 + Math.random() * 80;
+        this.tone(out, t, 'sawtooth', f, f * 1.05, 0.5, 0.12, 28);
+        break;
+      }
+      case 'snort':
+        this.noiseBurst(out, t, 0.2, 500, 0.8, 0.5, 250);
+        break;
+      case 'shear':
+        for (let i = 0; i < 2; i++) this.noiseBurst(out, t + i * 0.1, 0.05, 4200, 3, 0.4);
+        break;
+      case 'pop':
+        this.tone(out, t, 'sine', 600, 1200, 0.08, 0.25);
         break;
     }
   }

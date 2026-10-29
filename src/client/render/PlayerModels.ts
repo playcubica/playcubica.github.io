@@ -218,6 +218,18 @@ export class PlayerModels {
       r.body.position.y = sneak ? -0.15 : 0;
       r.body.rotation.x = 0;
       r.tag.position.y = sneak ? 1.95 : 2.15;
+      if (s.anim & Anim.RIDING) {
+        // Astride a horse: seated on its back, legs forward and apart.
+        r.body.position.y = 0.62;
+        r.tag.position.y = 2.8;
+        r.legL.rotation.set(-1.25, 0, -0.32);
+        r.legR.rotation.set(-1.25, 0, 0.32);
+        r.armL.rotation.x = -0.5;
+        if (r.swing === 0) r.armR.rotation.x = -0.5;
+      } else {
+        r.legL.rotation.z = 0;
+        r.legR.rotation.z = 0;
+      }
 
       // Light the model like the world around it.
       const l = this.world.getLight(Math.floor(x), Math.floor(y + 1.2), Math.floor(z));

@@ -65,6 +65,8 @@ export class PlayerSession {
   violations = 0;
   /** Swing animation shown to others until this time (ms). */
   swingUntil = 0;
+  /** The creature this player sits on. */
+  riding: number | null = null;
   /** Times of recent chat messages (rate limit). */
   chatTimes: number[] = [];
   /** Last message received from this client (ms). */

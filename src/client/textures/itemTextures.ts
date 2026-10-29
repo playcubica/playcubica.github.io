@@ -131,6 +131,31 @@ function meat(c: RGB, fat: RGB): Pixmap {
   return p;
 }
 
+function drumstick(c: RGB): Pixmap {
+  const p = blank();
+  for (let y = 2; y < 11; y++) for (let x = 5; x < 15; x++) {
+    const d = Math.hypot((x - 10) / 4.2, (y - 6.5) / 4);
+    if (d <= 1) p.set(x, y, shade(c, 0.85 + (1 - d) * 0.3));
+  }
+  for (let t = 0; t < 5; t++) { p.set(6 - t, 10 + t, [240, 236, 220]); p.set(7 - t, 10 + t, [214, 208, 190]); }
+  p.set(1, 14, [240, 236, 220]);
+  p.set(1, 15, [240, 236, 220]);
+  p.set(2, 15, [240, 236, 220]);
+  return p;
+}
+
+function bucket(fill: RGB | null): Pixmap {
+  const p = blank();
+  for (let y = 5; y < 15; y++) {
+    const inset = Math.floor((y - 5) / 4);
+    for (let x = 3 + inset; x <= 12 - inset; x++) p.set(x, y, shade([196, 198, 206], x === 3 + inset || x === 12 - inset ? 0.7 : 0.95 + ((x + y) % 4) * 0.03));
+  }
+  for (let x = 3; x <= 12; x++) p.set(x, 5, fill ? fill : [70, 72, 80]);
+  if (fill) for (let x = 4; x <= 11; x++) p.set(x, 6, shade(fill, 0.92));
+  for (let t = 0; t < 8; t++) { const a = (t / 7) * Math.PI; p.set(Math.round(7.5 - Math.cos(a) * 5), Math.round(5 - Math.sin(a) * 4), [150, 152, 160]); }
+  return p;
+}
+
 const PAINTERS: Record<number, () => Pixmap> = {
   [I.STICK]: () => {
     const p = blank();
@@ -170,6 +195,65 @@ const PAINTERS: Record<number, () => Pixmap> = {
     return p;
   },
   [I.RAW_MEAT]: () => meat([200, 70, 70], [240, 200, 190]),
+  [I.RAW_FOWL]: () => drumstick([238, 176, 160]),
+  [I.COOKED_FOWL]: () => drumstick([196, 120, 58]),
+  [I.EGG]: () => {
+    const p = blank();
+    for (let y = 2; y < 15; y++) for (let x = 3; x < 13; x++) {
+      const d = Math.hypot((x - 7.5) / 4.6, (y - (y < 9 ? 9 : 9)) / (y < 9 ? 6.6 : 5.4));
+      if (d <= 1) p.set(x, y, shade([236, 222, 190], d < 0.45 && x < 7 && y < 8 ? 1.12 : 1.02 - d * 0.18));
+    }
+    p.set(9, 6, [206, 186, 150]);
+    p.set(6, 11, [206, 186, 150]);
+    return p;
+  },
+  [I.FRIED_EGG]: () => {
+    const p = blank();
+    const r = mulberry32(61);
+    for (let y = 2; y < 15; y++) for (let x = 1; x < 15; x++) {
+      const d = Math.hypot((x - 7.5) / 6.4, (y - 8.5) / 5.6);
+      if (d <= 1 + (r() - 0.5) * 0.15) p.set(x, y, shade([246, 244, 236], d > 0.85 ? 0.85 : 1));
+    }
+    for (let y = 6; y < 11; y++) for (let x = 6; x < 11; x++) if (Math.hypot(x - 8, y - 8) <= 2.3) p.set(x, y, shade([250, 186, 40], x < 8 && y < 8 ? 1.15 : 1));
+    return p;
+  },
+  [I.FEATHER]: () => {
+    const p = blank();
+    for (let t = 0; t < 12; t++) {
+      const x = 3 + t;
+      const y = 13 - t;
+      p.set(x, y, [150, 140, 120]);
+      if (t > 2 && t < 11) for (let k = 1; k <= 2 + (t > 5 && t < 9 ? 1 : 0); k++) {
+        p.set(x - k, y - k, shade([240, 240, 236], 1 - k * 0.04));
+        p.set(x + k, y + k > 15 ? 15 : y + k, shade([228, 228, 222], 1 - k * 0.05));
+      }
+    }
+    return p;
+  },
+  [I.SHEARS]: () => {
+    const p = blank();
+    for (let t = 0; t < 9; t++) {
+      p.set(3 + t, 12 - t, shade([214, 216, 222], 1 - t * 0.02));
+      p.set(4 + t, 12 - t, shade([170, 172, 180], 1 - t * 0.02));
+      p.set(12 - t, 12 - t, shade([214, 216, 222], 0.95));
+    }
+    for (const [cx, cy] of [[3, 13], [12, 13]]) for (let y = -1; y <= 1; y++) for (let x = -1; x <= 1; x++) if (x || y) p.set(cx + x, cy + y, [176, 60, 50]);
+    return p;
+  },
+  [I.BUCKET]: () => bucket(null),
+  [I.MILK_BUCKET]: () => bucket([250, 250, 246]),
+  [I.SADDLE]: () => {
+    const p = blank();
+    for (let y = 5; y < 12; y++) for (let x = 2; x < 14; x++) {
+      const dip = y < 7 && x > 4 && x < 11;
+      if (!dip) p.set(x, y, shade([140, 84, 46], 0.9 + ((x + y) % 3) * 0.05 - (y === 11 ? 0.2 : 0)));
+    }
+    for (let x = 1; x < 15; x++) p.set(x, 7, [96, 56, 30]);
+    for (let y = 11; y < 15; y++) { p.set(4, y, [70, 44, 26]); p.set(11, y, [70, 44, 26]); }
+    p.set(4, 14, [200, 200, 206]);
+    p.set(11, 14, [200, 200, 206]);
+    return p;
+  },
   [I.COOKED_MEAT]: () => meat([150, 82, 44], [222, 170, 110]),
   [I.FLEECE]: () => {
     const p = blank();

@@ -178,10 +178,43 @@ from client-reported positions (bounded by the speed check).
   (the F3 panel; hidden by default, F3 flips and saves it). From the main menu and
   the pause menu; applied live.
 
-### Creatures (stage 5)
-- Original creatures (`shared/entities/mobs.ts`), not 1:1 equivalents of another game's mobs:
-  - Passive: Grazer צמרן (fleece + meat), Tuskling חטון (meat), Stiltfowl רגלון (meat), Hornox קרנוף
-    (hide + meat). Wander; flee when hit.
+### Creatures (stage 5, animals reworked after stage 7)
+- Status per creature, and what's next: **`docs/creatures.md`** (keep it current).
+- `shared/entities/mobs.ts`: monsters are our own designs; animals are real species in our own style:
+  - Animals (ids kept from the old ones: 1 sheep, 2 pig, 3 chicken, 4 cow; new 5 horse, 6 wolf, 7 cat,
+    8 rabbit, 9 fox, 15 goat). `MobDef.animal` (food, tame, shear, milk, eggs, ride, prey, nocturnal,
+    hops, rams), `habitat` (biomes, ground blocks, group, weight), `variant(biome, rnd)`, `retaliates`.
+  - `MobFlag` (BABY, SHEARED, TAMED, SITTING, SADDLED, RIDDEN, ANGRY, LOVE) travel in `EntityInfo.flags`
+    and `mobState`; `MobAnim` (ATTACK, FUSE, FLEE, EAT, SLEEP, RAM) in mobMove.
+  - Host (`MobManager`): breeding (`LOVE_TICKS` 600, partner within 8 → baby between them, parents'
+    cooldown 6000; pets/horses only when tamed; wolf/cat babies keep the owner), babies grow in
+    `GROW_TICKS` 24000 (feeding −10%), body/hit box × `BABY_SCALE`; tempting (food in hand within 10);
+    sheep graze (grass → dirt, regrow fleece); eggs every 6000–12000 ticks; wolves: pack anger, tamed
+    ones follow (walk > 6, teleport > 14), sit toggle, defend the owner (`ownerHurt`) and join the
+    owner's attacks (`ownerAttacks`); foxes sleep by day and hunt chickens/rabbits at night; goats ram;
+    rabbits hop; shy animals flee non-sneaking players. `interact()` returns what happens to the hand
+    (consume / replace / give / ride / none); `GameServer.interact` applies it to the real inventory.
+  - Riding: right-click a horse (not a baby). Untamed: the rider can't steer; after 2–5 s it's tamed with
+    chance temper % (feeding +5, each throw-off +5) or throws them. Tamed + saddled → `ride` message
+    with steer, speed 8.5, jump 10.5; the rider's client moves (body gets the horse's size, eye 2.3,
+    auto-step), the host checks speed (14 b/s) and `carry`s the horse along; `dismount` (Shift), death,
+    disconnect and rifts get you off. Others see the rider seated (`Anim.RIDING`).
+  - Saving: animals are kept. On chunk unload they go to `GameServer.dormant` (by chunk key) and come
+    back when the chunk loads; `save()` writes `meta.creatures` = dormant + loaded (`SavedMob`, only
+    `SAVED_FLAGS`). Cats are placed once per settlement (`meta.catsAt`). Monsters/traders aren't saved.
+  - Natural animals: by biome (`trySpawnAnimals`) in the 24–44 ring on their ground with sky light ≥ 9,
+    while fewer than 10 animals are within 48 blocks (250 loaded max); 8% babies.
+  - Items: raw/cooked fowl, egg → fried egg, feather, bucket (I_I/_I_), milk bucket (drink, bucket back),
+    saddle (HHH/HIH hide + iron), shears (_I/I_).
+- Looks (`client/render/mobModels.ts`): each animal has a builder (cuboids on named bones with pivots and
+  resting rotations; `quad()` frames four-legged ones; features, variants and designed baby proportions)
+  and an animator (walk cycles by speed, grazing, glances, sit/sleep poses, wag, wing flaps, hops,
+  gallop, ram). Skins: colour + `Pattern` (+ patches, shaggy, stripes) + pixel details on the front
+  (`face`) or sides (`side`). Monsters/traders keep role-tagged box lists (`partsRig`).
+- Dev gallery: `gallery.html` (dev server only, not built): every creature, variant, flags, animation,
+  front/side/back/quarter views, player-size frame and hit box. Host commands: `/summon <kind> [baby]
+  [variant] [count]`, `/mobinfo` (nearest creature's state), `/grow` (nearby babies grow, cooldowns end).
+- Monsters:
   - Hostile: Gloomwalker הולך-אפלה (melee 3, burns in direct sunlight, drops gloom ash = fuel),
     Thornslinger קוצן (keeps 5–10 blocks away, shoots arcing thorns, drops sticks), Skitterling זחלן
     (fast, climbs walls, drops silk), Sporecap פטריון (puffs for 1.5 s, then a spore cloud: up to 7
@@ -194,9 +227,8 @@ from client-reported positions (bounded by the speed check).
   75% of attempts use the surface (so the cap isn't spent on caves far below), otherwise any floor within
   ±20 of their height. Kinds by `spawnWeight` (`pickSpawnKind`): gloomwalkers 4, the rest 2; gloomwalkers
   come in groups of 2–4 and notice players within 32 blocks (`followRange`, others 16). Cap 20 per player /
-  50 total (groups are cut to fit). Passive herds of 2–3 on grass with sky light ≥ 9, cap 8 per player /
-  24. Despawn beyond 80 blocks (hostiles also randomly beyond 32). Creatures are not saved (they respawn
-  naturally). A night simulation on a real world gives ~10–14 gloomwalkers around a surface player.
+  50 total (groups are cut to fit). Animals: see above (by biome, saved). Monsters despawn beyond 80
+  blocks (also randomly beyond 32) and are not saved. A night simulation on a real world gives ~10–14 gloomwalkers around a surface player.
 - Looks (`MobRenderer`): box models in model pixels; each box gets a pixel-art skin (one texel per model
   pixel) painted from its colour + a `Pattern` (fur, fleece, cloth, rags, ribs, spots, feather, chitin,
   plain) and an optional bottom `band` (hooves, boots, cuffs). A model's skins share one canvas atlas;
@@ -207,8 +239,8 @@ from client-reported positions (bounded by the speed check).
   player send `knockback`; players get 0.5 s invulnerability against creatures.
 - Sync: `entitySpawn` (kind 'mob' / 'projectile'), `mobMove` 10 Hz [id,x,y,z,yaw,anim], `entityEvent`
   (hurt/death/spores), `entityDespawn`. Thorns are extrapolated on the client from their launch velocity.
-- New items: raw/cooked meat, fleece, hide, silk (all three also work as the bedroll's soft row),
-  gloom ash (fuel 800), spore powder.
+- Items from creatures: raw/cooked meat and fowl, fleece, hide, feather, egg, silk (fleece/hide/silk also
+  work as the bedroll's soft row), gloom ash (fuel 800), spore powder.
 - Host commands: `/summon <grazer|tuskling|stiltfowl|hornox|gloomwalker|thornslinger|skitterling|sporecap>`,
   `/time day|night`. Can't sleep with hostiles within 10 blocks.
 - Testing note: when the desktop app's browser pane is hidden it stops requestAnimationFrame; drive
